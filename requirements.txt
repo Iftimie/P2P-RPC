@@ -1,1 +1,9 @@
 flask
+pymongo
+multipledispatch
+dill
+varint
+mmh3
+passlib
+requests
+deprecated

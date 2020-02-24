@@ -9,7 +9,15 @@ setuptools.setup(
     author_email='iftimie.alexandru.florentin@gmail.com',
     packages=setuptools.find_packages(),
     install_requires=[
-        'flask'
+        'flask',
+        'pymongo',
+        'multipledispatch',
+        'dill',
+        'varint',
+        'mmh3',
+        'passlib',
+        'requests',
+        'deprecated',
       ],
 
     keywords=['object', 'detection', 'truck']
