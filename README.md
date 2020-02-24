@@ -180,3 +180,8 @@ The brokerworker node has a default HTTP port 5001 and a mongod port 5101
 
 The clientworker node has a default HTTP port 5002 and a mongod port 5102
 
+## Installation
+Source based installation, maybe a distribution will be published on pypi.
+```
+pip3 install git+git://github.com/Iftimie/P2P-RPC.git
+```
