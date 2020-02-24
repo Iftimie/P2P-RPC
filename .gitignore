@@ -1,0 +1,7 @@
+build/
+dist/
+truckms.egg-info/
+.pytest_cache/
+*.pyc
+.idea/
+*.log
