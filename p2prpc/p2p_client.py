@@ -373,7 +373,7 @@ class P2PClientApp(P2PFlaskApp):
 
         return inner_decorator
 
-def create_p2p_client_app(discovery_ips_file, local_port, mongod_port, cache_path, password=""):
+def create_p2p_client_app(discovery_ips_file, cache_path, local_port=5000, mongod_port=5100, password=""):
     p2p_client_app = P2PClientApp(discovery_ips_file=discovery_ips_file, local_port=local_port, mongod_port=mongod_port,
                                   cache_path=cache_path, password=password)
     p2p_client_app.background_server = ServerThread(p2p_client_app)
