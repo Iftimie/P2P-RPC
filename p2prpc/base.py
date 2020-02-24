@@ -168,6 +168,8 @@ class P2PFlaskApp(Flask):
         self.discovery_ips_file = discovery_ips_file
         self.crypt_pass = sha256_crypt.encrypt(password)
 
+        if not os.path.isabs(cache_path):
+            raise ValueError("cache_path must be absolute {}".format(cache_path))
         if not os.path.exists(cache_path):
             os.mkdir(cache_path)
 

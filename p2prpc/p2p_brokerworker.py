@@ -71,7 +71,12 @@ def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_
     update_['progress'] = 100.0
     if not all(isinstance(k, str) for k in update_.keys()):
         raise ValueError("All keys in the returned dictionary must be strings in func {}".format(f.__name__))
-    p2p_push_update_one(mongod_port, db, col, filter, update_, password=password)
+
+    try:
+        p2p_push_update_one(mongod_port, db, col, filter, update_, password=password)
+    except Exception as e:
+        logger.error("Results pushing to server resulted in errors", exc_info=True)
+        raise e
     return update_
 
 

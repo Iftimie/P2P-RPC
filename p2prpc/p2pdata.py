@@ -58,6 +58,9 @@ def serialize_doc_for_net(data) -> Tuple[dict, str]:
         the json may contain additional information in order to decode the files after they are received at the
         other end
     """
+    file_basenames = [os.path.basename(v.name) for v in data.values() if isinstance(v, io.IOBase)]
+    if len(set(file_basenames)) != len(file_basenames):
+        raise ValueError("There are keys in returned dictionary that point to the same file: {}".format([k for k, v in data.items() if isinstance(v, io.IOBase)]))
     files = {os.path.basename(v.name): v for k, v in data.items() if isinstance(v, io.IOBase)}
     files_significance = {os.path.basename(v.name): k for k, v in data.items() if isinstance(v, io.IOBase)}
     new_data = {k: v for k, v in data.items() if not isinstance(v, io.IOBase)}

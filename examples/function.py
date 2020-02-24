@@ -6,5 +6,5 @@ def analyze_large_file(video_handle: io.IOBase, arg2: int) -> {"results_file1": 
                                                                "res_var": int}:
     video_handle.close()
     return {"results_file1": open(video_handle.name, 'rb'),
-            "results_file2": open(video_handle.name, 'rb'),
+            "results_file2": open(__file__, 'rb'),
             "res_var": 10}
