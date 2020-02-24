@@ -16,6 +16,8 @@ The scenario will be the following, we have a computationally intensive function
 Assuming we have a task that requires as input 0 or multiple files as input and may return 0 or multiple files as output we can declare a function in the following way:
 * function must type annotate all its input arguments
 * function must type annotate its return argument as a dictionary where the values are the returned items datatypes 
+
+function.py
 ```python
 import io
 
@@ -65,6 +67,7 @@ localhost:5001
 
 For our simple case, the broker does not need a network discovery file as it does not need to reach any other node. It only needs to be reached.
 
+brokerworker.py
 ```python
 from p2prpc.p2p_brokerworker import P2PBrokerworkerApp
 from function import analyze_large_file
@@ -81,6 +84,7 @@ broker_worker_app.run(host='0.0.0.0')
 ```
 
 ### Declaring the clientworker
+clientworker.py
 ```python
 from p2prpc.p2p_clientworker import P2PClientworkerApp
 from function import analyze_large_file
@@ -96,13 +100,15 @@ clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(analyze_large_
 clientworker_app.run(host='0.0.0.0')
 
 ```
-As with the client.py we need to create a file with a list of addresses for network discovery. The clientorker will search for work, pull the input arguments, execute the function then push the output items.
+As with the client.py we need to create a file with a list of addresses for network discovery. The clientworker will search for work, pull the input arguments, execute the function then push the output items.
 It will run these steps in an infinite loop.
 
 network_discovery_clientworker.txt
 ```
 localhost:5001
 ```
+
+In total there are 6 files to declare when running all 3 nodes on the same machine. Not great, not terrible. 
 
 ### Explaining some of the concepts
 
@@ -151,7 +157,7 @@ The node creates a mongodb collection using the function name. In this collectio
 The node creates the following HTTP routes:
 * p2p_push_update: using an identifier, it accepts new data (input arguments) or updates data (output values)
 * p2p_pull_update: using an identifier, client nodes will ask for output values, and clientworkers will ask for input arguments
-* execute_function: using an identifier and if the can_do_work_func() function returns True, it will start a subprocess using the received argumenst and the decorated function
+* execute_function: using an identifier and if the can_do_work_func() function returns True ( a GPU is available ), it will start a subprocess using the received argumenst and the decorated function
 * search_work: if for a specific set of input arguments no subprocess or no other clientworker has started  work, it will return the identifier
 
 #### ClientWorker code
@@ -161,3 +167,16 @@ It will ask for an identifier if one, and then it will make calls to:
 * p2p_pull_update to download input arguments
 * call to the function using the downloaded arguments
 * p2p_push_update once the function has finished
+
+
+#### Hidden stuff
+All 3 nodes have background HTTP routes for network bookkeeping (how many nodes there are, what are their types, workload, etc)
+
+There are background threads that make updates to the network node states, or delete old function calls to save up space, or actually execute functions such as the clientworker.
+
+The client node has a default HTTP port 5000 and a mongod port 5100
+
+The brokerworker node has a default HTTP port 5001 and a mongod port 5101
+
+The clientworker node has a default HTTP port 5002 and a mongod port 5102
+
