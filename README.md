@@ -94,6 +94,7 @@ clientworker_app = P2PClientworkerApp("network_discovery_clientworker.txt", pass
 # decoration in this case does not return a new function
 clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(analyze_large_file)
 clientworker_app.run(host='0.0.0.0')
+
 ```
 As with the client.py we need to create a file with a list of addresses for network discovery. The clientorker will search for work, pull the input arguments, execute the function then push the output items.
 It will run these steps in an infinite loop.
