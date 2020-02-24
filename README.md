@@ -110,6 +110,26 @@ localhost:5001
 
 In total there are 6 files to declare when running all 3 nodes on the same machine. Not great, not terrible. 
 
+#### Additional function features
+When having long running functions, we may want to know about their progress, be it locally, on a reachable brokerworker or
+clientworker. Thus we can import p2p_progress_hook and call it with current index and end index. The result will be a progress key in database with range 0-100%
+```python
+import io
+from p2prpc.p2p_client import p2p_progress_hook
+
+def analyze_large_file(video_handle: io.IOBase, arg2: int) -> {"results_file1": io.IOBase,
+                                                               "results_file2": io.IOBase,
+                                                               "res_var": int}:
+    video_handle.close()
+    for i in range(100):
+        p2p_progress_hook(i, 100)
+    return {"results_file1": open(video_handle.name, 'rb'),
+            "results_file2": open(__file__, 'rb'),
+            "res_var": 10}
+
+```
+
+
 ### Explaining some of the concepts
 
 #### Function type annotation
