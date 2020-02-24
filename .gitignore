@@ -5,3 +5,6 @@ truckms.egg-info/
 *.pyc
 .idea/
 *.log
+examples/brokerworkerdb
+examples/clientdb
+examples/clientworkerdb
