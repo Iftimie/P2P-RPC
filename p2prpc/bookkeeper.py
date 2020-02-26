@@ -129,22 +129,6 @@ def update_function(local_port, app_roles, discovery_ips_file):
     discovery_ips_file: can be None
     """
     #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
     logger = logging.getLogger(__name__)
 
     discovered_states = []
