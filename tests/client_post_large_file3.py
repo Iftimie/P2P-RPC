@@ -3,7 +3,11 @@ import os
 import requests
 import pickle
 import struct
+import tempfile
 import time
+import shutil
+
+CHUNK_SIZE = 2**16
 
 
 class DataFilesStreamer:
@@ -32,9 +36,10 @@ class DataFilesStreamer:
             bfilename = filename.encode()
             yield struct.pack('!i', len(bfilename))
             yield bfilename
-            yield struct.pack('!i', len(fobj.name))
+            yield struct.pack('!i', os.path.getsize(fobj.name))
+
             while True:
-                data = fobj.read(2**10)
+                data = fobj.read(CHUNK_SIZE)
                 # TODO this will still fill up memory, but much less. a sleep is a trivial solution
                 if not data:
                     break
@@ -42,7 +47,7 @@ class DataFilesStreamer:
 
 
 largef = r'/home/achellaris/big_data/torrent/torrents/The.Sopranos.S06.720p.BluRay.DD5.1.x264-DON/The.Sopranos.S06E15.Remember.When.720p.BluRay.DD5.1.x264-DON.mkv'
-generator = DataFilesStreamer({"largefile.mkv": open(largef, 'rb')}, data={"some_data": "data"})
+generator = DataFilesStreamer({"largefile.mkv": open(__file__, 'rb')}, data={"some_data": "data"})
 streamer = StreamingIterator(len(generator), iter(generator))
 r = requests.post('http://localhost:5000', data=streamer)
 print(r.status_code)

@@ -34,6 +34,6 @@ size = some_function_size()  # Get your generator's size
 largef = r'/home/achellaris/big_data/torrent/torrents/The.Sopranos.S06.720p.BluRay.DD5.1.x264-DON/The.Sopranos.S06E15.Remember.When.720p.BluRay.DD5.1.x264-DON.mkv'
 
 streamer = StreamingIterator(size, generator)
-r = requests.post('http://localhost:5000', data=streamer)
-# r = requests.post('http://localhost:5000', data={"some_data":"some_dataaaa"}, files={ "file.txt": open(largef, 'rb')})
+# r = requests.post('http://localhost:5000', data=streamer)
+r = requests.post('http://localhost:5000', data={"some_data":"some_dataaaa"}, files={ "file.txt": open(__file__, 'rb')})
 print(r.status_code)
