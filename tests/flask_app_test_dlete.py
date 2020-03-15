@@ -39,7 +39,7 @@ class DataFilesReceiver:
         for i in range(num_files):
             filename_size = struct.unpack('!i', self.stream.read(4))[0]
             filename = self.stream.read(filename_size).decode()
-            filesize = struct.unpack('!i', self.stream.read(4))[0]
+            filesize = struct.unpack('!Q', self.stream.read(8))[0]
             self.files[filename] = WrapperReceivedFile(filesize, stream)
 
 

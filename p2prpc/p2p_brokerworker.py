@@ -173,14 +173,15 @@ def heartbeat(mongod_port, db="tms"):
     return make_response("Thank god you are alive", 200)
 
 
-def delete_old_finished_requests(mongod_port, registry_functions, time_limit=24):
+def delete_old_requests(mongod_port, registry_functions, time_limit=24, include_finished=True):
     db = MongoClient(port=mongod_port)['p2p']
     collection_names = set(db.collection_names()) - {"_default"}
     for col_name in collection_names:
         key_interpreter_dict = registry_functions[col_name]['key_interpreter']
 
         col_items = list(db[col_name].find({}))
-        col_items = filter(lambda item: "finished" in item, col_items)
+        if include_finished:
+            col_items = filter(lambda item: "finished" in item, col_items)
         col_items = filter(lambda item: (time.time() - item['timestamp']) > time_limit * 3600, col_items)
 
         for item in col_items:
@@ -192,7 +193,7 @@ def delete_old_finished_requests(mongod_port, registry_functions, time_limit=24)
 
 class P2PBrokerworkerApp(P2PFlaskApp):
 
-    def __init__(self, discovery_ips_file, cache_path, local_port=5001, mongod_port=5101, password="", old_requests_time_limit=23):
+    def __init__(self, discovery_ips_file, cache_path, local_port=5001, mongod_port=5101, password="", old_requests_time_limit=23, include_finished=True):
         configure_logger("brokerworker", module_level_list=[(__name__, 'DEBUG')])
         super(P2PBrokerworkerApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
                                                  cache_path=cache_path, password=password)
@@ -201,10 +202,11 @@ class P2PBrokerworkerApp(P2PFlaskApp):
         self.pass_req_dec = password_required(password)
         self.worker_pool = multiprocessing.Pool(2)
         self.list_futures = []
-        self.register_time_regular_func(partial(delete_old_finished_requests,
+        self.register_time_regular_func(partial(delete_old_requests,
                                                 mongod_port=mongod_port,
                                                 registry_functions=self.registry_functions,
-                                                time_limit=old_requests_time_limit))
+                                                time_limit=old_requests_time_limit,
+                                                include_finished=include_finished))
 
     def register_p2p_func(self, can_do_locally_func=lambda: True, time_limit=12):
         """

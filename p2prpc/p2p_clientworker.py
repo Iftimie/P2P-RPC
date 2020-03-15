@@ -6,7 +6,7 @@ from .p2pdata import p2p_pull_update_one, deserialize_doc_from_net
 import inspect
 import io
 import os
-from .p2p_brokerworker import function_executor, delete_old_finished_requests
+from .p2p_brokerworker import function_executor, delete_old_requests
 from . import p2p_brokerworker
 from .base import derive_vars_from_function
 from .base import configure_logger
@@ -65,7 +65,7 @@ class P2PClientworkerApp(P2PFlaskApp):
         self.registry_functions = defaultdict(dict)
         self.worker_pool = multiprocessing.Pool(2)
         self.list_futures = []
-        self.register_time_regular_func(partial(delete_old_finished_requests,
+        self.register_time_regular_func(partial(delete_old_requests,
                                                          mongod_port=mongod_port,
                                                          registry_functions=self.registry_functions))
 

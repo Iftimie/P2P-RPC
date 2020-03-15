@@ -36,7 +36,6 @@ class DataFilesStreamer:
             bfilename = filename.encode()
             yield struct.pack('!i', len(bfilename))
             yield bfilename
-            print(os.path.getsize(fobj.name))
             yield struct.pack('!Q', os.path.getsize(fobj.name))
 
             while True:
@@ -47,8 +46,37 @@ class DataFilesStreamer:
                 yield data
 
 
-largef = r'/home/achellaris/big_data/torrent/torrents/The.Sopranos.S06.720p.BluRay.DD5.1.x264-DON/The.Sopranos.S06E15.Remember.When.720p.BluRay.DD5.1.x264-DON.mkv'
-generator = DataFilesStreamer({"largefile.mkv": open(__file__, 'rb')}, data={"some_data": "data"})
-streamer = StreamingIterator(len(generator), iter(generator))
-r = requests.post('http://localhost:5000', data=streamer)
-print(r.status_code)
+class WrapperReceivedFile:
+
+    def __init__(self, filesize, stream, name):
+        self.name = name
+        fo, path = tempfile.mkstemp()
+
+        while filesize > 0:
+            data = stream.read(min(filesize, CHUNK_SIZE))
+            os.write(fo, data)
+            filesize -= len(data)
+        os.close(fo)
+        self.path = path
+
+    def save(self, filepath):
+        shutil.move(self.path, filepath)
+
+
+class DataFilesReceiver:
+    def __init__(self, stream):
+        self.stream = stream
+
+        encoded_data_size = self.stream.read(4)
+        encoded_data_size = struct.unpack('!i', encoded_data_size)[0]
+        encoded_data = self.stream.read(encoded_data_size)
+        self.form = pickle.loads(encoded_data)
+        self.files = dict()
+
+        num_files = struct.unpack('!i', self.stream.read(4))[0]
+        for i in range(num_files):
+            filename_size = struct.unpack('!i', self.stream.read(4))[0]
+            filename = self.stream.read(filename_size).decode()
+            filesize = struct.unpack('!Q', self.stream.read(8))[0]
+            self.files[filename] = WrapperReceivedFile(filesize, stream, name=filename)
+
