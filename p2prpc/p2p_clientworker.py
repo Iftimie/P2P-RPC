@@ -62,6 +62,7 @@ class P2PClientworkerApp(P2PFlaskApp):
                                                             (p2p_brokerworker.__name__, 'INFO')])
         super(P2PClientworkerApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
                                                  cache_path=cache_path, password=password)
+        self.roles.append("clientworker")
         self.registry_functions = defaultdict(dict)
         self.worker_pool = multiprocessing.Pool(2)
         self.list_futures = []
@@ -84,6 +85,8 @@ class P2PClientworkerApp(P2PFlaskApp):
             key_interpreter, db, col = derive_vars_from_function(f)
 
             self.registry_functions[f.__name__]['key_interpreter'] = key_interpreter
+            self.registry_functions[f.__name__]['original_func'] = f
+
 
             updir = os.path.join(self.cache_path, db, col)  # upload directory
             os.makedirs(updir, exist_ok=True)

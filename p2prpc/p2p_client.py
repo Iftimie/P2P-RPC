@@ -22,6 +22,7 @@ from werkzeug.serving import make_server
 from .base import configure_logger
 import os
 import traceback
+from collections import defaultdict
 
 
 def select_lru_worker(local_port):
@@ -305,8 +306,10 @@ class P2PClientApp(P2PFlaskApp):
         configure_logger("client", module_level_list=[(__name__, 'DEBUG')])
         super(P2PClientApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
                                                  cache_path=cache_path, password=password)
+        self.roles.append("client")
         self.worker_pool = multiprocessing.Pool(1)
         self.background_server = None
+        self.registry_functions = defaultdict(dict)
 
     def register_p2p_func(self, can_do_locally_func=lambda: False):
         """
@@ -323,6 +326,8 @@ class P2PClientApp(P2PFlaskApp):
 
         def inner_decorator(f):
             key_interpreter, db, col = derive_vars_from_function(f)
+            self.registry_functions[f.__name__]['original_func'] = f
+
 
             @wraps(f)
             def wrap(*args, **kwargs):

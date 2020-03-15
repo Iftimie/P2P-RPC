@@ -13,7 +13,7 @@ p2pbookdb = "p2pbookdb"
 collection = "nodes"
 
 
-def node_states(mongod_port):
+def route_node_states(mongod_port):
     logger = logging.getLogger(__name__)
     try:
         client = MongoClient(port=mongod_port)

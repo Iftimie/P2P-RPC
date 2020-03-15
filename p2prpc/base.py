@@ -5,7 +5,7 @@ import time
 import threading
 import logging
 import requests
-from .bookkeeper import node_states, update_function
+from .bookkeeper import route_node_states, update_function
 import io
 from warnings import warn
 import collections
@@ -110,8 +110,8 @@ def create_bookkeeper_p2pblueprint(local_port: int, app_roles: List[str], discov
         P2PBluePrint
     """
     bookkeeper_bp = P2PBlueprint("bookkeeper_bp", __name__, role="bookkeeper")
-    func = (wraps(node_states)(partial(node_states, mongod_port)))
-    bookkeeper_bp.route("/node_states", methods=['POST', 'GET'])(func)
+    decorated_route_node_states = (wraps(route_node_states)(partial(route_node_states, mongod_port)))
+    bookkeeper_bp.route("/node_states", methods=['POST', 'GET'])(decorated_route_node_states)
 
     time_regular_func = partial(update_function, local_port, app_roles, discovery_ips_file)
     bookkeeper_bp.register_time_regular_func(time_regular_func)

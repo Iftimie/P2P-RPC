@@ -230,6 +230,7 @@ class P2PBrokerworkerApp(P2PFlaskApp):
             key_interpreter, db, col = derive_vars_from_function(f)
 
             self.registry_functions[f.__name__]['key_interpreter'] = key_interpreter
+            self.registry_functions[f.__name__]['original_func'] = f
 
             updir = os.path.join(self.cache_path, db, col)  # upload directory
             os.makedirs(updir, exist_ok=True)
