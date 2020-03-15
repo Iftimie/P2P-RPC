@@ -248,14 +248,60 @@ def upload_only_no_execution_multiple_large_files(tmpdir, port_offset, func, fil
     time.sleep(3)
 
 
+def crashing_function(video_handle: io.IOBase, random_arg: int) -> {"results": str}:
+    video_handle.close()
+    return {"results": "okay"}
+
+
+def function_crash_on_broker_test(tmpdir, port_offset, func, file):
+    client_port = 5000 + port_offset
+    broker_port = 5004 + port_offset
+
+    ndclient_path = os.path.join(tmpdir, "ndclient.txt")
+    cache_client_dir = os.path.join(tmpdir, "client")
+    cache_bw_dir = os.path.join(tmpdir, "bw")
+    with open(ndclient_path, "w") as f: f.write("localhost:{}\n".format(broker_port))
+    client_app = create_p2p_client_app(ndclient_path, local_port=client_port, mongod_port=client_port+100, cache_path=cache_client_dir)
+    client_func = client_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+
+    broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port+100, cache_path=cache_bw_dir)
+    broker_worker_app.register_p2p_func(can_do_locally_func=lambda :True)(func)
+    broker_worker_thread = ServerThread(broker_worker_app, 10)
+    broker_worker_thread.start()
+    while select_lru_worker(client_port) == (None, None):
+        time.sleep(3)
+        print("Waiting for client to know about broker")
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        num_calls = 10
+        list_futures_of_futures = []
+        for i in range(num_calls):
+            future = executor.submit(client_func, video_handle=open(file, 'rb'), random_arg=i)
+            list_futures_of_futures.append(future)
+        list_futures = [f.result() for f in list_futures_of_futures]
+        assert len(list_futures) <= num_calls
+        list_results = [f.get() for f in list_futures]
+        assert len(list_results) == num_calls and all(isinstance(r, dict) for r in list_results)
+        print(list_results)
+
+    time.sleep(10)
+    client_app.background_server.shutdown()
+    print("Shutdown client")
+    broker_worker_thread.shutdown()
+    print("Shutdown brokerworker")
+    time.sleep(3)
+
+
 if __name__ == "__main__":
     # multiple_client_calls(clean_and_create())
     # multiple_client_calls_client_worker(clean_and_create(), 0, func=large_file_function)
     # multiple_client_calls_client_worker(clean_and_create(), 0, func=large_file_function_wait)
     # delete_old_requests(clean_and_create(), 100, func=actual_large_file_function_wait,
     #                     file='/home/achellaris/big_data/torrent/torrents/Wim Hof Method/03 - Breathing/Extended breathing exercise.mp4')
-    largef = r'/home/achellaris/big_data/torrent/torrents/The.Sopranos.S06.720p.BluRay.DD5.1.x264-DON/The.Sopranos.S06E15.Remember.When.720p.BluRay.DD5.1.x264-DON.mkv'
-    upload_only_no_execution_multiple_large_files(clean_and_create(), 1010, func=actual_large_file_function_wait,
-                        file=largef)
+    # largef = r'/home/achellaris/big_data/torrent/torrents/The.Sopranos.S06.720p.BluRay.DD5.1.x264-DON/The.Sopranos.S06E15.Remember.When.720p.BluRay.DD5.1.x264-DON.mkv'
+    # upload_only_no_execution_multiple_large_files(clean_and_create(), 1010, func=actual_large_file_function_wait,
+    #                     file=largef)
+    function_crash_on_broker_test(clean_and_create(), 1410, func=crashing_function,
+                        file=__file__)
 
     clean_and_create()

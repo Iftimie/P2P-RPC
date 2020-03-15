@@ -20,6 +20,7 @@ from passlib.hash import sha256_crypt
 import os
 from .p2pdata import deserialize_doc_from_db
 from .registry_args import remove_values_from_doc
+from multiprocessing import Process
 
 
 def call_remote_func(ip, port, db, col, func_name, filter, password):
@@ -60,7 +61,6 @@ def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_
     kwargs = {k: kwargs_[k] for k in inspect.signature(f).parameters.keys()}
 
     logger.info("Executing function: " + f.__name__)
-    print(kwargs)
     try:
         update_ = f(**kwargs)
     except Exception as e:
@@ -112,9 +112,11 @@ def route_execute_function(f, mongod_port, db, col, key_interpreter, can_do_loca
                     key_interpreter=key_interpreter,
                     logging_queue=self._logging_queue,
                     password=self.crypt_pass))
-        res = self.worker_pool.apply_async(func=new_f)
+        p = Process(target=new_f)
+        p.start()
+        # res = self.worker_pool.apply_async(func=new_f)
         MongoClient(port=mongod_port)[db][col].update_one(filter, {"$set": {"started": f.__name__}})
-        self.list_futures.append(res)
+        self.list_processes.append(p)
     else:
         logger.info("Cannot execute function now: " + f.__name__)
 
@@ -200,8 +202,7 @@ class P2PBrokerworkerApp(P2PFlaskApp):
         self.roles.append("brokerworker")
         self.registry_functions = defaultdict(dict)
         self.pass_req_dec = password_required(password)
-        self.worker_pool = multiprocessing.Pool(2)
-        self.list_futures = []
+        self.list_processes = []
         self.register_time_regular_func(partial(delete_old_requests,
                                                 mongod_port=mongod_port,
                                                 registry_functions=self.registry_functions,
