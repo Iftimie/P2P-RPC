@@ -3,7 +3,7 @@ from p2prpc.p2p_brokerworker import P2PBrokerworkerApp
 import os
 import io
 from shutil import rmtree
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import time
 from p2prpc.p2p_clientworker import P2PClientworkerApp
 from p2prpc.p2p_client import select_lru_worker
@@ -149,7 +149,7 @@ def delete_old_requests(tmpdir, port_offset, func, file=None):
     broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port+100, cache_path=cache_bw_dir,
                                            old_requests_time_limit=(1/3600) * 30)
     broker_worker_app.register_p2p_func(can_do_locally_func=lambda :False)(func)
-    broker_worker_thread = ServerThread(broker_worker_app)
+    broker_worker_thread = ServerThread(broker_worker_app, processes=10)
     broker_worker_thread.start()
     clientworker_app = P2PClientworkerApp(ndcw_path, local_port=client_worker_port, mongod_port=client_worker_port+100, cache_path=cache_cw_dir)
     clientworker_app.register_p2p_func(can_do_work_func=lambda :True)(func)
@@ -216,14 +216,14 @@ def upload_only_no_execution_multiple_large_files(tmpdir, port_offset, func, fil
     broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port+100, cache_path=cache_bw_dir,
                                            old_requests_time_limit=(1/3600) * 10, include_finished=False)
     broker_worker_app.register_p2p_func(can_do_locally_func=lambda :False)(func)
-    broker_worker_thread = ServerThread(broker_worker_app)
+    broker_worker_thread = ServerThread(broker_worker_app, 10)
     broker_worker_thread.start()
     while select_lru_worker(client_port) == (None, None):
         time.sleep(3)
         print("Waiting for client to know about broker")
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        num_calls = 1
+        num_calls = 5
         list_futures_of_futures = []
         for i in range(num_calls):
             future = executor.submit(client_func, video_handle=open(file, 'rb'), random_arg=i)
@@ -254,9 +254,8 @@ if __name__ == "__main__":
     # multiple_client_calls_client_worker(clean_and_create(), 0, func=large_file_function_wait)
     # delete_old_requests(clean_and_create(), 100, func=actual_large_file_function_wait,
     #                     file='/home/achellaris/big_data/torrent/torrents/Wim Hof Method/03 - Breathing/Extended breathing exercise.mp4')
-    # upload_only_multiple_large_files(clean_and_create(), 1010, func=actual_large_file_function_wait,
-    #                     file='/home/achellaris/big_data/torrent/torrents/The.Sopranos.S06.720p.BluRay.DD5.1.x264-DON/The.Sopranos.S06E15.Remember.When.720p.BluRay.DD5.1.x264-DON.mkv')
+    largef = r'/home/achellaris/big_data/torrent/torrents/The.Sopranos.S06.720p.BluRay.DD5.1.x264-DON/The.Sopranos.S06E15.Remember.When.720p.BluRay.DD5.1.x264-DON.mkv'
     upload_only_no_execution_multiple_large_files(clean_and_create(), 1010, func=actual_large_file_function_wait,
-                        file=__file__)
+                        file=largef)
 
     clean_and_create()

@@ -262,9 +262,9 @@ def create_remote_identifier(local_identifier, check_remote_identifier_args):
 
 class ServerThread(threading.Thread):
 
-    def __init__(self, app: P2PFlaskApp):
+    def __init__(self, app: P2PFlaskApp, processes=1):
         threading.Thread.__init__(self)
-        self.srv = make_server('0.0.0.0', app.local_port, app)
+        self.srv = make_server('0.0.0.0', app.local_port, app, processes=processes)
         self.app = app
         self.ctx = app.app_context()
         self.ctx.push()
@@ -373,10 +373,10 @@ class P2PClientApp(P2PFlaskApp):
 
         return inner_decorator
 
-def create_p2p_client_app(discovery_ips_file, cache_path, local_port=5000, mongod_port=5100, password=""):
+def create_p2p_client_app(discovery_ips_file, cache_path, local_port=5000, mongod_port=5100, password="", processes=3):
     p2p_client_app = P2PClientApp(discovery_ips_file=discovery_ips_file, local_port=local_port, mongod_port=mongod_port,
                                   cache_path=cache_path, password=password)
-    p2p_client_app.background_server = ServerThread(p2p_client_app)
+    p2p_client_app.background_server = ServerThread(p2p_client_app, processes=processes)
     p2p_client_app.background_server.start()
     wait_until_online(p2p_client_app.local_port)
     wait_for_discovery(p2p_client_app.local_port)

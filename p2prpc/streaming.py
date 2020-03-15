@@ -38,7 +38,9 @@ class DataFilesStreamer:
             yield bfilename
             yield struct.pack('!Q', os.path.getsize(fobj.name))
 
+            count = 0
             while True:
+                count += 1
                 data = fobj.read(CHUNK_SIZE)
                 # TODO this will still fill up memory, but much less. a sleep is a trivial solution
                 if not data:
