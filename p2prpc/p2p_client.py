@@ -118,6 +118,7 @@ def get_remote_future(f, identifier, cache_path, mongod_port, db, col, key_inter
     expected_keys = inspect.signature(f).return_annotation
     expected_keys_list = list(expected_keys.keys())
     expected_keys_list.append("progress")
+    expected_keys_list.append("error")
     if any(item[k] is None for k in expected_keys):
         hint_file_keys = [k for k, v in expected_keys.items() if v == io.IOBase]
 
@@ -137,6 +138,7 @@ def get_local_future(f, identifier, cache_path, mongod_port, db, col, key_interp
     expected_keys = inspect.signature(f).return_annotation
     expected_keys_list = list(expected_keys.keys())
     expected_keys_list.append("progress")
+    expected_keys_list.append("error")
 
     item = find(mongod_port, db, col, {"identifier": identifier}, key_interpreter_dict)[0]
     item = {k: v for k, v in item.items() if k in expected_keys_list}
@@ -156,6 +158,8 @@ class Future:
         wait_time = 4
         while any(item[k] is None for k in item):
             item = self.get_future_func()
+            if 'error' in item and item['error'] != '':
+                raise Exception(str(item))
             time.sleep(wait_time)
             count_time += wait_time
             if count_time > timeout:
@@ -173,6 +177,7 @@ def get_expected_keys(f):
     expected_keys = inspect.signature(f).return_annotation
     expected_keys = {k: None for k in expected_keys}
     expected_keys['progress'] = 0
+    expected_keys['error'] = ""
     return expected_keys
 
 

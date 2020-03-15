@@ -250,6 +250,7 @@ def upload_only_no_execution_multiple_large_files(tmpdir, port_offset, func, fil
 
 def crashing_function(video_handle: io.IOBase, random_arg: int) -> {"results": str}:
     video_handle.close()
+    raise ValueError("Some error")
     return {"results": "okay"}
 
 
@@ -273,22 +274,89 @@ def function_crash_on_broker_test(tmpdir, port_offset, func, file):
         print("Waiting for client to know about broker")
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        num_calls = 10
+        num_calls = 1
         list_futures_of_futures = []
         for i in range(num_calls):
             future = executor.submit(client_func, video_handle=open(file, 'rb'), random_arg=i)
             list_futures_of_futures.append(future)
         list_futures = [f.result() for f in list_futures_of_futures]
         assert len(list_futures) <= num_calls
-        list_results = [f.get() for f in list_futures]
-        assert len(list_results) == num_calls and all(isinstance(r, dict) for r in list_results)
-        print(list_results)
+        list_results = []
+        count_exceptions = 0
+        for f in list_futures:
+            try:
+                list_results.append(f.get())
+            except:
+                count_exceptions += 1
+        assert count_exceptions == num_calls
+        # assert len(list_results) == num_calls and all(isinstance(r, dict) for r in list_results)
+        # print(list_results)
 
-    time.sleep(10)
     client_app.background_server.shutdown()
     print("Shutdown client")
     broker_worker_thread.shutdown()
     print("Shutdown brokerworker")
+    time.sleep(3)
+
+
+def function_crash_on_clientworker_test(tmpdir, port_offset, func, file):
+    client_port = 5000 + port_offset
+    broker_port = 5004 + port_offset
+
+    ndclient_path = os.path.join(tmpdir, "ndclient.txt")
+    cache_client_dir = os.path.join(tmpdir, "client")
+    cache_bw_dir = os.path.join(tmpdir, "bw")
+    with open(ndclient_path, "w") as f: f.write("localhost:{}\n".format(broker_port))
+    client_app = create_p2p_client_app(ndclient_path, local_port=client_port, mongod_port=client_port+100, cache_path=cache_client_dir)
+    client_func = client_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+
+    broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port+100, cache_path=cache_bw_dir)
+    broker_worker_app.register_p2p_func(can_do_locally_func=lambda :False)(func)
+    broker_worker_thread = ServerThread(broker_worker_app, 10)
+    broker_worker_thread.start()
+    while select_lru_worker(client_port) == (None, None):
+        time.sleep(3)
+        print("Waiting for client to know about broker")
+
+    ndcw_path = os.path.join(tmpdir, "ndcw.txt")
+    client_worker_port = 5005 + port_offset
+    cache_cw_dir = os.path.join(tmpdir, "cw")
+    with open(ndcw_path, "w") as f: f.write("localhost:{}\n".format(broker_port))
+    clientworker_app = P2PClientworkerApp(ndcw_path, local_port=client_worker_port,
+                                          mongod_port=client_worker_port + 100, cache_path=cache_cw_dir)
+    clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(func)
+    clientworker_thread = ServerThread(clientworker_app)
+    clientworker_thread.start()
+    while select_lru_worker(client_worker_port) == (None, None):
+        time.sleep(3)
+        print("Waiting for clientworker to know about broker")
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        num_calls = 1
+        list_futures_of_futures = []
+        for i in range(num_calls):
+            future = executor.submit(client_func, video_handle=open(file, 'rb'), random_arg=i)
+            list_futures_of_futures.append(future)
+        list_futures = [f.result() for f in list_futures_of_futures]
+        assert len(list_futures) <= num_calls
+        list_results = []
+        count_exceptions = 0
+        for f in list_futures:
+            try:
+                list_results.append(f.get())
+            except:
+                print("exception happened")
+                count_exceptions += 1
+        assert count_exceptions == num_calls
+        # assert len(list_results) == num_calls and all(isinstance(r, dict) for r in list_results)
+        # print(list_results)
+
+    client_app.background_server.shutdown()
+    print("Shutdown client")
+    broker_worker_thread.shutdown()
+    print("Shutdown brokerworker")
+    clientworker_thread.shutdown()
+    print("Shutdown clientworker")
     time.sleep(3)
 
 
@@ -301,7 +369,9 @@ if __name__ == "__main__":
     # largef = r'/home/achellaris/big_data/torrent/torrents/The.Sopranos.S06.720p.BluRay.DD5.1.x264-DON/The.Sopranos.S06E15.Remember.When.720p.BluRay.DD5.1.x264-DON.mkv'
     # upload_only_no_execution_multiple_large_files(clean_and_create(), 1010, func=actual_large_file_function_wait,
     #                     file=largef)
-    function_crash_on_broker_test(clean_and_create(), 1410, func=crashing_function,
+    # function_crash_on_broker_test(clean_and_create(), 1510, func=crashing_function,
+    #                     file=__file__)
+    function_crash_on_clientworker_test(clean_and_create(), 1510, func=crashing_function,
                         file=__file__)
 
     clean_and_create()

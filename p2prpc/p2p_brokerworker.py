@@ -21,6 +21,7 @@ import os
 from .p2pdata import deserialize_doc_from_db
 from .registry_args import remove_values_from_doc
 from multiprocessing import Process
+import traceback
 
 
 def call_remote_func(ip, port, db, col, func_name, filter, password):
@@ -64,14 +65,15 @@ def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_
     try:
         update_ = f(**kwargs)
     except Exception as e:
-        logger.error("Function execution crashed for filter: {}".format(str(filter)), exc_info=True)
+        log_message = "Function execution crashed for filter: {}\n".format(str(filter)) + traceback.format_exc()
+        logger.error(log_message)
+        p2p_push_update_one(mongod_port, db, col, filter, {"error": log_message}, password=password)
         raise e
     logger.info("Finished executing function: " + f.__name__)
     update_['finished'] = True
     update_['progress'] = 100.0
     if not all(isinstance(k, str) for k in update_.keys()):
         raise ValueError("All keys in the returned dictionary must be strings in func {}".format(f.__name__))
-
     try:
         p2p_push_update_one(mongod_port, db, col, filter, update_, password=password)
     except Exception as e:
