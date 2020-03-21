@@ -21,6 +21,7 @@ import os
 import subprocess
 from passlib.hash import sha256_crypt
 import pymongo
+import sys
 logger = logging.getLogger(__name__)
 
 
@@ -130,6 +131,13 @@ def wait_for_mongo_online(mongod_port):
             continue
 
 
+def is_debug_mode():
+    gettrace = getattr(sys, 'gettrace', None)
+    if gettrace is None:
+        return False
+    elif gettrace():
+        return True
+
 class P2PFlaskApp(Flask):
     """
     Flask derived class for P2P applications. In this framework, the P2P app can have different roles. Not all nodes in
@@ -153,8 +161,14 @@ class P2PFlaskApp(Flask):
         self.roles = []
         self._blueprints = {}
         self._time_regular_funcs = []
+        # FIXME this if else statement in case of debug mode was introduced just for an unfortunated combination of OS
+        #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaegr
+        if is_debug_mode():
+            self._logging_queue = multiprocessing.Queue()
+        else:
+            self.manager = multiprocessing.Manager()
+            self._logging_queue = self.manager.Queue()
         self._time_regular_thread = None
-        self._logging_queue = multiprocessing.Manager().Queue()
         self._logger_thread = None
         self._stop_thread = False
         self._time_interval = 10

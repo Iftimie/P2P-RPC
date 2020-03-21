@@ -1,5 +1,5 @@
 import requests
-from .base import P2PFlaskApp, create_bookkeeper_p2pblueprint
+from .base import P2PFlaskApp, create_bookkeeper_p2pblueprint, is_debug_mode
 import multiprocessing
 from flask import make_response, jsonify
 from .base import derive_vars_from_function
@@ -50,11 +50,14 @@ def check_remote_identifier(ip, port, db, col, func_name, identifier, password):
 
 
 def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_queue, password):
-    qh = logging.handlers.QueueHandler(logging_queue)
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
     root.handlers = []
-    root.addHandler(qh)
+    if logging_queue is not None:
+        # FIXME this if statement in case of debug mode was introduced just for an unfortunated combination of OS
+        #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
+        qh = logging.handlers.QueueHandler(logging_queue)
+        root.addHandler(qh)
 
     logger = logging.getLogger(__name__)
 
@@ -112,7 +115,9 @@ def route_execute_function(f, mongod_port, db, col, key_interpreter, can_do_loca
                     f=f, filter=filter,
                     mongod_port=mongod_port, db=db, col=col,
                     key_interpreter=key_interpreter,
-                    logging_queue=self._logging_queue,
+                    # FIXME this if statement in case of debug mode was introduced just for an unfortunated combination of OS
+                    #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
+                    logging_queue=self._logging_queue if not is_debug_mode() else None,
                     password=self.crypt_pass))
         p = Process(target=new_f)
         p.start()

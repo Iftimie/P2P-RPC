@@ -1,4 +1,4 @@
-from .base import P2PFlaskApp, create_bookkeeper_p2pblueprint
+from .base import P2PFlaskApp, create_bookkeeper_p2pblueprint, is_debug_mode
 from functools import wraps
 from functools import partial
 from .p2pdata import p2p_insert_one
@@ -123,7 +123,9 @@ class P2PClientworkerApp(P2PFlaskApp):
                             f=f, filter=filter_,
                             mongod_port=self.mongod_port, db=db, col=col,
                             key_interpreter=key_interpreter,
-                            logging_queue=self._logging_queue,
+                            # FIXME this if statement in case of debug mode was introduced just for an unfortunated combination of OS
+                            #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
+                            logging_queue=self._logging_queue if not is_debug_mode() else None,
                             password=self.crypt_pass))
                 res = self.worker_pool.apply_async(func=new_f)
                 self.list_futures.append(res)
