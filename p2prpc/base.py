@@ -1,6 +1,6 @@
 from logging.config import dictConfig
 from typing import List
-from flask import Flask, Blueprint, make_response
+from flask import Flask, Blueprint, make_response, request
 import time
 import threading
 import logging
@@ -41,11 +41,11 @@ def echo():
     return make_response("I exist", 200)
 
 
-def wait_until_online(local_port):
+def wait_until_online(local_port, password):
     # while the app is not alive yet
     while True:
         try:
-            response = requests.get('http://{}:{}/echo'.format('localhost', local_port))
+            response = requests.get('http://{}:{}/echo'.format('localhost', local_port), headers={'Authorization': password})
             if response.status_code == 200:
                 break
         except:
@@ -138,6 +138,18 @@ def is_debug_mode():
     elif gettrace():
         return True
 
+
+def password_required(password):
+    def internal_decorator(f):
+        @wraps(f)
+        def wrap(*args, **kwargs):
+            if not sha256_crypt.verify(password, request.headers.get('Authorization')):
+                return make_response("Unauthorized", 401)
+            return f(*args, **kwargs)
+        return wrap
+    return internal_decorator
+
+
 class P2PFlaskApp(Flask):
     """
     Flask derived class for P2P applications. In this framework, the P2P app can have different roles. Not all nodes in
@@ -181,13 +193,14 @@ class P2PFlaskApp(Flask):
         self.password = password
         self.discovery_ips_file = discovery_ips_file
         self.crypt_pass = sha256_crypt.encrypt(password)
+        self.pass_req_dec = password_required(password)
 
         if not os.path.isabs(cache_path):
             raise ValueError("cache_path must be absolute {}".format(cache_path))
         if not os.path.exists(cache_path):
             os.mkdir(cache_path)
 
-        self.route("/echo", methods=['GET'])(echo)
+        self.route("/echo", methods=['GET'])(self.pass_req_dec(echo))
 
         bookkeeper_bp = create_bookkeeper_p2pblueprint(local_port=self.local_port,
                                                        app_roles=self.roles,
@@ -219,13 +232,13 @@ class P2PFlaskApp(Flask):
     # TODO I should also implement the shutdown method that will close the time_regular_thread
 
 
-    def _time_regular(self, list_funcs, time_interval, local_port, stop_thread):
+    def _time_regular(self, list_funcs, time_interval, local_port, stop_thread, password):
         # while the app is not alive it
         count = 0
         max_trials = 10
         while count < max_trials:
             try:
-                response = requests.get('http://{}:{}/echo'.format('localhost', local_port))
+                response = requests.get('http://{}:{}/echo'.format('localhost', local_port), headers={"Authorization": password})
                 if response.status_code == 200:
                     break
             except:
@@ -281,7 +294,7 @@ class P2PFlaskApp(Flask):
         self._time_regular_thread = threading.Thread(target=self._time_regular,
                                                      args=(
                                                          self._time_regular_funcs, self._time_interval, self.local_port,
-                                                         lambda: self._stop_thread))
+                                                         lambda: self._stop_thread, self.crypt_pass))
         self._time_regular_thread.start()
 
     def stop_background_threads(self):

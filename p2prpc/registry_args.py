@@ -108,11 +108,18 @@ that all arguments to the dictionary are of those types
 allowed_func_datatypes = [int, float, str, IOBase, bool]
 
 
+def callable_encoder(func):
+    if isinstance(func, Callable):
+        return base64.b64encode(dill.dumps(func)).decode('utf8')
+    else:
+        raise ValueError("func not instance of Callable")
+
+
 db_encoder = {int: lambda value: value,
               float: lambda value: value,
               str: lambda value: value,
               IOBase: lambda handle: handle.name,
-              Callable: lambda func: base64.b64encode(dill.dumps(func)).decode('utf8'),
+              Callable: callable_encoder,
               List[str]: lambda value: value,
               List[int]: lambda value: value,
               List[float]: lambda value: value,

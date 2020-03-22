@@ -126,18 +126,6 @@ def deserialize_doc_from_net(files, json, up_dir, key_interpreter=None):
     data = deserialize_doc_from_db(data, key_interpreter)
     return data
 
-
-def password_required(password):
-    def internal_decorator(f):
-        @wraps(f)
-        def wrap(*args, **kwargs):
-            if not sha256_crypt.verify(password, request.headers.get('Authorization')):
-                return make_response("Unauthorized", 401)
-            return f(*args, **kwargs)
-        return wrap
-    return internal_decorator
-
-
 def p2p_route_insert_one(mongod_port, db, col, deserializer=deserialize_doc_from_net):
     """
     Function designed to be decorated with flask.app.route

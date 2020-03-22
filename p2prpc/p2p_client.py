@@ -14,7 +14,7 @@ import threading
 import inspect
 import requests
 from .base import derive_vars_from_function
-from .registry_args import hash_kwargs
+from .registry_args import hash_kwargs, db_encoder
 from .p2p_brokerworker import check_remote_identifier
 from .p2pdata import find
 from .registry_args import kicomp
@@ -22,13 +22,15 @@ from werkzeug.serving import make_server
 from .base import configure_logger
 import os
 import traceback
-from collections import defaultdict
+from collections import defaultdict, Callable
+import dis
 
 
-def select_lru_worker(local_port):
+def select_lru_worker(local_port, func, password):
     """
     Selects the least recently used worker from the known states and returns its IP and PORT
     """
+    func_bytecode = db_encoder[Callable](func)
     logger = logging.getLogger(__name__)
     try:
         res = requests.get('http://localhost:{}/node_states'.format(local_port)).json()  # will get the data defined above
@@ -44,11 +46,15 @@ def select_lru_worker(local_port):
     res1 = sorted(res1, key=lambda x: x['workload'])
     while res1:
         try:
-            response = requests.get('http://{}/echo'.format(res1[0]['address']))
-            if response.status_code == 200:
-                break
-            else:
+            addr = res1[0]['address']
+            response = requests.get('http://{}/echo'.format(addr), headers={'Authorization': password})
+            if response.status_code != 200:
                 raise ValueError
+            worker_functions = requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': password}).json()
+
+            if func.__name__ not in worker_functions or worker_functions[func.__name__]["bytecode"] != func_bytecode:
+                raise ValueError(f"Function {func.__name__} in worker {addr} has different bytecode compared to local function")
+            break
         except:
             logger.info("worker unavailable {}".format(res1[0]['address']))
             res1.pop(0)
@@ -164,7 +170,7 @@ class Future:
             time.sleep(wait_time)
             count_time += wait_time
             if count_time > timeout:
-                raise ValueError("Waiting time exceeded")
+                raise TimeoutError("Waiting time exceeded")
             logger.info("Not done yet " + str(item))
         return item
 
@@ -325,9 +331,10 @@ class P2PClientApp(P2PFlaskApp):
         """
 
         def inner_decorator(f):
+            if f.__name__ in self.registry_functions:
+                raise ValueError(f"Function {f.__name__} already registered")
             key_interpreter, db, col = derive_vars_from_function(f)
             self.registry_functions[f.__name__]['original_func'] = f
-
 
             @wraps(f)
             def wrap(*args, **kwargs):
@@ -344,7 +351,7 @@ class P2PClientApp(P2PFlaskApp):
                 kwargs.update(expected_keys)
                 kwargs['identifier'] = identifier
 
-                lru_ip, lru_port = select_lru_worker(self.local_port)
+                lru_ip, lru_port = select_lru_worker(self.local_port, f, self.crypt_pass)
 
                 if can_do_locally_func() or lru_ip is None:
                     nodes = []
@@ -390,6 +397,6 @@ def create_p2p_client_app(discovery_ips_file, cache_path, local_port=5000, mongo
                                   cache_path=cache_path, password=password)
     p2p_client_app.background_server = ServerThread(p2p_client_app, processes=processes)
     p2p_client_app.background_server.start()
-    wait_until_online(p2p_client_app.local_port)
+    wait_until_online(p2p_client_app.local_port, p2p_client_app.crypt_pass)
     wait_for_discovery(p2p_client_app.local_port)
     return p2p_client_app

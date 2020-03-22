@@ -1,10 +1,8 @@
 import requests
-from .base import P2PFlaskApp, create_bookkeeper_p2pblueprint, is_debug_mode
-import multiprocessing
+from .base import P2PFlaskApp, is_debug_mode
 from flask import make_response, jsonify
 from .base import derive_vars_from_function
 import time
-from .p2pdata import password_required
 from flask import request
 from functools import wraps, partial
 from .p2pdata import p2p_route_insert_one, deserialize_doc_from_net, p2p_route_pull_update_one, \
@@ -16,12 +14,12 @@ import logging
 from json import dumps, loads
 from .base import configure_logger
 from collections import defaultdict
-from passlib.hash import sha256_crypt
 import os
 from .p2pdata import deserialize_doc_from_db
-from .registry_args import remove_values_from_doc
+from .registry_args import remove_values_from_doc, db_encoder
 from multiprocessing import Process
 import traceback
+from collections import Callable
 
 
 def call_remote_func(ip, port, db, col, func_name, filter, password):
@@ -173,6 +171,7 @@ def route_identifier_available(mongod_port, db, col, identifier):
     else:
         return make_response("no", 404)
 
+
 def heartbeat(mongod_port, db="tms"):
     """
     Pottential vulnerability from flooding here
@@ -200,6 +199,11 @@ def delete_old_requests(mongod_port, registry_functions, time_limit=24, include_
                 db[col_name].remove(item)
 
 
+def route_registered_functions(registry_functions):
+    current_items = {fname: {"bytecode": db_encoder[Callable](f['original_func'])} for fname, f in registry_functions.items()}
+    return jsonify(current_items)
+
+
 class P2PBrokerworkerApp(P2PFlaskApp):
 
     def __init__(self, discovery_ips_file, cache_path, local_port=5001, mongod_port=5101, password="", old_requests_time_limit=23, include_finished=True):
@@ -208,7 +212,6 @@ class P2PBrokerworkerApp(P2PFlaskApp):
                                                  cache_path=cache_path, password=password)
         self.roles.append("brokerworker")
         self.registry_functions = defaultdict(dict)
-        self.pass_req_dec = password_required(password)
         self.list_processes = []
         self.register_time_regular_func(partial(delete_old_requests,
                                                 mongod_port=mongod_port,
@@ -280,5 +283,10 @@ class P2PBrokerworkerApp(P2PFlaskApp):
                         mongod_port=self.mongod_port, db=db, col=col))
             self.route("/identifier_available/{db}/{col}/{fname}/<identifier>".format(db=db, col=col, fname=f.__name__),
                        methods=['GET'])(identifier_available_partial)
+
+            registered_functions_partial = wraps(route_registered_functions)(
+                partial(self.pass_req_dec(route_registered_functions),
+                        registry_functions=self.registry_functions))
+            self.route("/registered_functions/", methods=['GET'])(registered_functions_partial)
 
         return inner_decorator

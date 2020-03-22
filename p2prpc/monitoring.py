@@ -45,7 +45,12 @@ def do_nothing_function(random_arg: int) -> {"results": str}:
     return {"results": "bye"}
 
 
-def create_apps(tmpdir, port_offset, func):
+def do_nothing_function_again(random_arg: int) -> {"results": str}:
+    return {"results": "bye"}
+
+
+
+def create_apps(tmpdir, port_offset, func, func2=None):
     client_port = 5000 + port_offset
     broker_port = 5004 + port_offset
 
@@ -55,12 +60,15 @@ def create_apps(tmpdir, port_offset, func):
     with open(ndclient_path, "w") as f: f.write("localhost:{}\n".format(broker_port))
     client_app = create_p2p_client_app(ndclient_path, local_port=client_port, mongod_port=client_port+100, cache_path=cache_client_dir)
     client_func = client_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+    client_func2 = None
+    if func2 is not None:
+        client_func2 = client_app.register_p2p_func(can_do_locally_func=lambda: False)(func2)
 
     broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port+100, cache_path=cache_bw_dir)
-    broker_worker_app.register_p2p_func(can_do_locally_func=lambda :False)(func)
+    broker_worker_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
     broker_worker_thread = ServerThread(broker_worker_app, 10)
     broker_worker_thread.start()
-    while select_lru_worker(client_port) == (None, None):
+    while select_lru_worker(client_port, func, client_app.crypt_pass) == (None, None):
         time.sleep(3)
         print("Waiting for client to know about broker")
 
@@ -73,7 +81,7 @@ def create_apps(tmpdir, port_offset, func):
     clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(func)
     clientworker_thread = ServerThread(clientworker_app)
     clientworker_thread.start()
-    while select_lru_worker(client_worker_port) == (None, None):
+    while select_lru_worker(client_worker_port, func, client_app.crypt_pass) == (None, None):
         time.sleep(3)
         print("Waiting for clientworker to know about broker")
 
@@ -83,9 +91,17 @@ def create_apps(tmpdir, port_offset, func):
         for i in range(num_calls):
             future = executor.submit(client_func, random_arg=i)
             list_futures_of_futures.append(future)
+            if client_func2 is not None:
+                future = executor.submit(client_func2, random_arg=i)
+                list_futures_of_futures.append(future)
         list_futures = [f.result() for f in list_futures_of_futures]
-        assert len(list_futures) == num_calls
-        list_results = [f.get() for f in list_futures]
+        assert len(list_futures) == num_calls if func2 is None else len(list_futures) == num_calls * 2
+        list_results = []
+        for f in list_futures:
+            try:
+                list_results.append(f.get(15))
+            except TimeoutError:
+                pass
         assert len(list_results) == num_calls
 
     return client_app, broker_worker_thread, clientworker_thread
@@ -101,7 +117,8 @@ def clean_and_create():
     return test_dir
 
 
-client_app, broker_worker_thread, clientworker_thread = create_apps(clean_and_create(), 1510, func=do_nothing_function)
+client_app, broker_worker_thread, clientworker_thread = create_apps(clean_and_create(), 1510, func=do_nothing_function,
+                                                                    func2=do_nothing_function_again)
 
 function_call_states(broker_worker_thread.app)
 
