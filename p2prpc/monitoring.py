@@ -29,7 +29,6 @@ def function_call_states(app: [P2PClientworkerApp, P2PBrokerworkerApp, P2PClient
     for f_name in app.registry_functions:
         _, db, col = derive_vars_from_function(app.registry_functions[f_name]['original_func'])
         items = find(app.mongod_port, db, col, {})
-        print(items)
 
 
 def destroy_apps(client_app, broker_worker_thread, clientworker_thread):
@@ -117,9 +116,13 @@ def clean_and_create():
     return test_dir
 
 
-client_app, broker_worker_thread, clientworker_thread = create_apps(clean_and_create(), 1510, func=do_nothing_function,
-                                                                    func2=do_nothing_function_again)
+def main():
+    client_app, broker_worker_thread, clientworker_thread = create_apps(clean_and_create(), 1510, func=do_nothing_function,
+                                                                        func2=do_nothing_function_again)
 
-function_call_states(broker_worker_thread.app)
+    function_call_states(broker_worker_thread.app)
 
-destroy_apps(client_app, broker_worker_thread, clientworker_thread)
+    destroy_apps(client_app, broker_worker_thread, clientworker_thread)
+
+if __name__ == "__main__":
+    main()
