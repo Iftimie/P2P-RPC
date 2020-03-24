@@ -97,7 +97,7 @@ class P2PBlueprint(Blueprint):
         return decorated_function_catcher
 
 
-def create_bookkeeper_p2pblueprint(local_port: int, app_roles: List[str], discovery_ips_file: str, mongod_port) -> P2PBlueprint:
+def create_bookkeeper_p2pblueprint(local_port: int, app_roles: List[str], discovery_ips_file: str, mongod_port, password: str) -> P2PBlueprint:
     """
     Creates the bookkeeper blueprint
 
@@ -114,7 +114,7 @@ def create_bookkeeper_p2pblueprint(local_port: int, app_roles: List[str], discov
     decorated_route_node_states = (wraps(route_node_states)(partial(route_node_states, mongod_port)))
     bookkeeper_bp.route("/node_states", methods=['POST', 'GET'])(decorated_route_node_states)
 
-    time_regular_func = partial(update_function, local_port, app_roles, discovery_ips_file)
+    time_regular_func = partial(update_function, local_port, app_roles, discovery_ips_file, password)
     bookkeeper_bp.register_time_regular_func(time_regular_func)
 
     return bookkeeper_bp
@@ -204,7 +204,8 @@ class P2PFlaskApp(Flask):
 
         bookkeeper_bp = create_bookkeeper_p2pblueprint(local_port=self.local_port,
                                                        app_roles=self.roles,
-                                                       discovery_ips_file=self.discovery_ips_file, mongod_port=self.mongod_port)
+                                                       discovery_ips_file=self.discovery_ips_file, mongod_port=self.mongod_port,
+                                                       password=self.crypt_pass)
         self.register_blueprint(bookkeeper_bp)
 
     def add_url_rule(self, rule, endpoint=None, view_func=None, **options):

@@ -314,7 +314,7 @@ def function_crash_on_clientworker_test(tmpdir, port_offset, func, file):
     broker_worker_app.register_p2p_func(can_do_locally_func=lambda :False)(func)
     broker_worker_thread = ServerThread(broker_worker_app, 10)
     broker_worker_thread.start()
-    while select_lru_worker(client_port) == (None, None):
+    while select_lru_worker(client_port, func, client_app.crypt_pass) == (None, None):
         time.sleep(3)
         print("Waiting for client to know about broker")
 
@@ -327,7 +327,7 @@ def function_crash_on_clientworker_test(tmpdir, port_offset, func, file):
     clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(func)
     clientworker_thread = ServerThread(clientworker_app)
     clientworker_thread.start()
-    while select_lru_worker(client_worker_port) == (None, None):
+    while select_lru_worker(client_worker_port, func, client_app.crypt_pass) == (None, None):
         time.sleep(3)
         print("Waiting for clientworker to know about broker")
 
