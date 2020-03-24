@@ -361,7 +361,8 @@ class P2PClientApp(P2PFlaskApp):
                                              key_interpreter=key_interpreter,
                                              # FIXME this if statement in case of debug mode was introduced just for an unfortunated combination of OS
                                              #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
-                                             logging_queue=self._logging_queue if not is_debug_mode() else None))
+                                             logging_queue=self._logging_queue if not is_debug_mode() else None,
+                                             password=self.crypt_pass))
                     res = self.worker_pool.apply_async(func=new_f)
                     logger.info("Executing function locally")
                 else:

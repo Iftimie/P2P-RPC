@@ -373,5 +373,7 @@ if __name__ == "__main__":
     #                     file=__file__)
     function_crash_on_clientworker_test(clean_and_create(), 1510, func=crashing_function,
                         file=__file__)
+    # TODO I still need to test what happens to a request when it remains unsolved due to outside factors (power drop)
+    #  and not internal function errors that can be catched
 
     clean_and_create()
