@@ -10,6 +10,9 @@ from p2prpc.p2p_client import select_lru_worker
 from shutil import rmtree
 from typing import Any
 from p2prpc.base import derive_vars_from_function
+import pymongo
+from pymongo import MongoClient
+from p2prpc.p2pdata import deserialize_doc_from_db
 
 
 def get_node_states(address="localhost:5000"):
@@ -26,9 +29,24 @@ def get_geo_location(ip=None):
 
 
 def function_call_states(app: [P2PClientworkerApp, P2PBrokerworkerApp, P2PClientApp]):
+    all_items = []
     for f_name in app.registry_functions:
-        _, db, col = derive_vars_from_function(app.registry_functions[f_name]['original_func'])
-        items = find(app.mongod_port, db, col, {})
+        ki, db, col = derive_vars_from_function(app.registry_functions[f_name]['original_func'])
+        items = find(app.mongod_port, db, col, {}, ki)
+        all_items.extend(items)
+    return all_items
+
+
+def item_by_func_and_id(app, func, identifier):
+    assert isinstance(identifier, str)
+    ki, db, col = derive_vars_from_function(func)
+
+    collection = list(MongoClient(port=app.mongod_port)[db][col].find({'identifier': identifier}))
+    for i in range(len(collection)):
+        collection[i] = deserialize_doc_from_db(collection[i], ki)
+
+    assert len(collection) == 0
+    return collection[0]
 
 
 def destroy_apps(client_app, broker_worker_thread, clientworker_thread):
