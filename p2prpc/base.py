@@ -435,6 +435,8 @@ def validate_function_signature(func):
     formal_args = list(inspect.signature(func).parameters.keys())
     if any(key in formal_args for key in ["identifier", "nodes", "timestamp"]):
         raise ValueError("identifier, nodes, timestamp are restricted keywords in this p2p framework")
+    if any("tmpfile" in k for k in formal_args):
+        raise ValueError("tmpfile is a restricted substring in argument names in this p2p framework")
 
     return_anno = inspect.signature(func).return_annotation
     if not "return" in inspect.getsource(func):

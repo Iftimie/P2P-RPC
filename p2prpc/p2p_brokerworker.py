@@ -196,7 +196,14 @@ def delete_old_requests(mongod_port, registry_functions, time_limit=24, include_
             if (time.time() - item['timestamp']) > time_limit * 3600:
                 document = deserialize_doc_from_db(item, key_interpreter_dict)
                 remove_values_from_doc(document)
+
+                #TODO refactor this somehow
+                for k in item:
+                    if "tmpfile" in k:
+                        os.remove(item[k])
+
                 db[col_name].remove(item)
+
 
 
 def route_registered_functions(registry_functions):

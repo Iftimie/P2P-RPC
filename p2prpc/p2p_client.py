@@ -23,6 +23,9 @@ from .base import configure_logger
 import os
 import traceback
 from collections import defaultdict, Callable
+from p2prpc.p2pdata import update_one
+import tempfile
+import pickle
 import dis
 
 
@@ -87,7 +90,7 @@ def get_available_brokers(local_port):
 
 
 def find_required_args():
-    necessary_args = ['db', 'col', 'filter', 'mongod_port', 'password']
+    necessary_args = ['db', 'col', 'filter', 'mongod_port', 'password', 'key_interpreter']
     actual_args = dict()
     frame_infos = inspect.stack()[:]
     for frame in frame_infos:
@@ -104,6 +107,46 @@ def p2p_progress_hook(curidx, endidx):
     update_ = {"progress": curidx/endidx * 100}
     filter_ = actual_args['filter']
     p2p_push_update_one(actual_args['mongod_port'], actual_args['db'], actual_args['col'], filter_, update_, password=actual_args['password'])
+
+
+def default_saving_func(filepath, item):
+    pickle.dump(item, open(filepath, 'wb'))
+
+
+def p2p_save(key, item, saving_func=default_saving_func):
+    actual_args = find_required_args()
+    fp = p2p_getfilepath()
+    document = {key: fp}
+    saving_func(fp, item)
+    update_one(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], document, upsert=False)
+
+
+def default_loading_func(filepath):
+    pickle.load(open(filepath, 'rb'))
+
+
+def p2p_load(key, loading_func=default_loading_func):
+    actual_args = find_required_args()
+    item = find(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], actual_args['key_interpreter'])[0]
+    if key in item:
+        return loading_func(item[key])
+    else:
+        return None
+
+
+def p2p_getfilepath():
+    filepath = tempfile.mkstemp(suffix="", dir=None, text=False)[1]
+    actual_args = find_required_args()
+    key = "tmpfile"
+    item = find(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], actual_args['key_interpreter'])[0]
+    count = 0
+    while key in item:
+        key += str(count)
+        count += 1
+    document = {key: filepath}
+    update_one(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], document,
+               upsert=False)
+    return filepath
 
 
 def p2p_dictionary_update(update_dictionary):
@@ -154,8 +197,9 @@ def get_local_future(f, identifier, cache_path, mongod_port, db, col, key_interp
 
 class Future:
 
-    def __init__(self, get_future_func):
+    def __init__(self, get_future_func, restart_func):
         self.get_future_func = get_future_func
+        self.restart_func = restart_func
 
     def get(self, timeout=3600*24):
         logger = logging.getLogger(__name__)
@@ -174,6 +218,9 @@ class Future:
             logger.info("Not done yet " + str(item))
         return item
 
+    def restart(self):
+        self.restart_func()
+
 
 def get_expected_keys(f):
     """
@@ -186,14 +233,6 @@ def get_expected_keys(f):
     expected_keys['progress'] = 0
     expected_keys['error'] = ""
     return expected_keys
-
-
-def create_future(f, identifier, cache_path, mongod_port, db, col, key_interpreter, password):
-    item = find(mongod_port, db, col, {"identifier": identifier}, key_interpreter)[0]
-    if item['nodes'] or 'remote_identifier' in item:
-        return Future(partial(get_remote_future, f, identifier, cache_path, mongod_port, db, col, key_interpreter, password))
-    else:
-        return Future(partial(get_local_future, f, identifier, cache_path, mongod_port, db, col, key_interpreter))
 
 
 def identifier_seen(mongod_port, identifier, db, col, expected_keys, key_interpreter, time_limit=24):
@@ -317,6 +356,22 @@ class P2PClientApp(P2PFlaskApp):
         self.background_server = None
         self.registry_functions = defaultdict(dict)
 
+    def create_future(self, f, identifier,  db, col, key_interpreter):
+        item = find(self.mongod_port, db, col, {"identifier": identifier}, key_interpreter)[0]
+        if item['nodes'] or 'remote_identifier' in item:
+            filter = {"identifier": identifier, "remote_identifier": item['remote_identifier']}
+            return Future(
+                partial(get_remote_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter, self.crypt_pass),
+                restart_func=partial(call_remote_func, item["ip"], item["port"], db, col, f.__name__, filter, self.crypt_pass))
+        else:
+            new_f = wraps(f)(partial(function_executor, f=f, filter={'identifier': item['identifier']},
+                                     mongod_port=self.mongod_port, db=db, col=col,
+                                     key_interpreter=key_interpreter,
+                                     logging_queue=self._logging_queue if not is_debug_mode() else None,
+                                     password=self.crypt_pass))
+            return Future(partial(get_local_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter),
+                          restart_func=partial(self.worker_pool.apply_async, new_f))
+
     def register_p2p_func(self, can_do_locally_func=lambda: False):
         """
         In p2p client, this decorator will have the role of deciding if the function should be executed remotely or
@@ -344,8 +399,7 @@ class P2PClientApp(P2PFlaskApp):
                 expected_keys = get_expected_keys(f)
                 if identifier_seen(self.mongod_port, identifier, db, col, expected_keys, key_interpreter):
                     logger.info("Returning future that may already be precomputed")
-                    return create_future(f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter,
-                                         self.crypt_pass)
+                    return self.create_future(f, identifier, db, col, key_interpreter)
 
                 validate_arguments(f, args, kwargs)
                 kwargs.update(expected_keys)
@@ -386,8 +440,7 @@ class P2PClientApp(P2PFlaskApp):
                     filter = {"identifier": identifier, "remote_identifier": kwargs['remote_identifier']}
                     call_remote_func(lru_ip, lru_port, db, col, f.__name__, filter, self.crypt_pass)
                     logger.info("Dispacthed function work to {},{}".format(lru_ip, lru_port))
-                return create_future(f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter,
-                                     self.crypt_pass)
+                return self.create_future(f, identifier, db, col, key_interpreter)
 
             return wrap
 
