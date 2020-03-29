@@ -160,7 +160,8 @@ def p2p_dictionary_update(update_dictionary):
     p2p_push_update_one(actual_args['db_url'], actual_args['db'], actual_args['col'], filter_, update_dictionary, password=actual_args['password'])
 
 
-def get_remote_future(f, identifier, cache_path, mongod_port, db, col, key_interpreter_dict, password):
+def get_remote_future(f, identifier, cache_path, mongod_port, db, col, key_interpreter_dict, password, jobs):
+    logger = logging.getLogger(__name__)
     up_dir = os.path.join(cache_path, db)
     if not os.path.exists(up_dir):
         os.mkdir(up_dir)
@@ -171,6 +172,12 @@ def get_remote_future(f, identifier, cache_path, mongod_port, db, col, key_inter
     expected_keys_list.append("error")
     if any(item[k] is None for k in expected_keys):
         hint_file_keys = [k for k, v in expected_keys.items() if v == io.IOBase]
+
+        filter_ = {"identifier": identifier, "remote_identifier": item['remote_identifier']}
+        fsf = frozenset(filter_.items())
+        while fsf in jobs and jobs[fsf].is_alive():
+            time.sleep(4)
+            logger.info("Waiting for uploading job to finish")
 
         search_filter = {"$or": [{"identifier": identifier}, {"identifier": item['remote_identifier']}]}
         p2p_pull_update_one(mongod_port, db, col, search_filter, expected_keys_list,
@@ -220,7 +227,7 @@ class Future:
         return item
 
     def restart(self):
-        self.__terminate_current()
+        self.__terminate_func()
         self.__restart_func()
 
 
@@ -368,15 +375,38 @@ class P2PClientApp(P2PFlaskApp):
         if identifier in self.jobs and self.jobs[identifier].is_alive():
             self.jobs[identifier].terminate()
 
+    def start_remote(self, lru_ip, lru_port, db, col, fname, filter_, ki):
+        kwargs = find(self.mongod_port, db, col, filter_, ki)[0]
+        kwargs_ = {k: v for k,v in kwargs.items() if k in ki}
+        other_keys = ['identifier', 'remote_identifier', 'progress', 'error']
+        kwargs_.update({k: kwargs[k] for k in other_keys})
+
+        nodes = [str(lru_ip) + ":" + str(lru_port)]
+        p2p_insert_one(self.mongod_port, db, col, kwargs_, nodes,
+                       current_address_func=partial(self_is_reachable, self.local_port),
+                       password=self.crypt_pass, do_upload=True)
+        call_remote_func(lru_ip, lru_port, db, col, fname, filter_, self.crypt_pass)
+
+    def terminate_remote(self, filter_, db, col, ki, funcname):
+        item = find(self.mongod_port, db, col, filter_, ki)[0]
+        frozenset_filter = frozenset(filter_.items())
+        ip, port = item['nodes'][0].split(":")
+
+        if frozenset_filter in self.jobs:
+            if self.jobs[frozenset_filter].is_alive():
+                self.jobs[frozenset_filter].terminate()
+            terminate_remote_func(ip, port, db, col, funcname, filter_, self.crypt_pass)
+
     def create_future(self, f, identifier):
         key_interpreter, db, col = derive_vars_from_function(f)
         item = find(self.mongod_port, db, col, {"identifier": identifier}, key_interpreter)[0]
         if item['nodes'] or 'remote_identifier' in item:
             filter = {"identifier": identifier, "remote_identifier": item['remote_identifier']}
+            ip, port = item['nodes'][0].split(":")
             return Future(
-                partial(get_remote_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter, self.crypt_pass),
-                restart_func=partial(call_remote_func, item["ip"], item["port"], db, col, f.__name__, filter, self.crypt_pass),
-                terminate_func=partial(terminate_remote_func, item["ip"], item["port"], db, col, f.__name__, filter, self.crypt_pass))
+                partial(get_remote_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter, self.crypt_pass, self.jobs),
+                restart_func=partial(call_remote_func, ip, port, db, col, f.__name__, filter, self.crypt_pass),
+                terminate_func=partial(self.terminate_remote, filter, db, col, key_interpreter, f.__name__))
         else:
             new_f = wraps(f)(partial(function_executor, f=f, filter={'identifier': item['identifier']},
                                      mongod_port=self.mongod_port, db=db, col=col,
@@ -443,10 +473,14 @@ class P2PClientApp(P2PFlaskApp):
                                                                             "password": self.crypt_pass})
                     p2p_insert_one(self.mongod_port, db, col, kwargs, nodes,
                                    current_address_func=partial(self_is_reachable, self.local_port),
-                                   password=self.crypt_pass)
+                                   password=self.crypt_pass, do_upload=False)
+
                     filter = {"identifier": identifier, "remote_identifier": kwargs['remote_identifier']}
-                    call_remote_func(lru_ip, lru_port, db, col, f.__name__, filter, self.crypt_pass)
                     logger.info("Dispacthed function work to {},{}".format(lru_ip, lru_port))
+                    p = multiprocessing.Process(target=partial(self.start_remote, lru_ip, lru_port, db, col, f.__name__, filter, key_interpreter))
+                    p.daemon = True
+                    p.start()
+                    self.jobs[frozenset(filter.items())] = p
                 return self.create_future(f, identifier)
 
             return wrap

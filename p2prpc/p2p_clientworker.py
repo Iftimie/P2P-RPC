@@ -2,7 +2,7 @@ from .base import P2PFlaskApp, create_bookkeeper_p2pblueprint, is_debug_mode
 from functools import wraps
 from functools import partial
 from .p2pdata import p2p_insert_one
-from .p2pdata import p2p_pull_update_one, deserialize_doc_from_net
+from .p2pdata import p2p_pull_update_one, deserialize_doc_from_net, find
 import inspect
 import io
 import os
@@ -16,6 +16,7 @@ import requests
 import collections
 import multiprocessing
 from collections import defaultdict
+from json import dumps
 
 
 def find_response_with_work(local_port, db, collection, func_name, password):
@@ -55,15 +56,22 @@ def find_response_with_work(local_port, db, collection, func_name, password):
     return res_json, res_broker_ip, res_broker_port
 
 
-def check_brokerworker_termination(jobs):
+def check_brokerworker_termination(jobs, mongod_port, password):
+    logger = logging.getLogger(__name__)
+
     for filteritems in jobs:
+        process, db, col, func_name = jobs[filteritems]
+        if not process.is_alive():
+            continue
         filter = {k: v for k, v in filteritems}
-        url = 'http://{}/check_function_termination/{}/{}/{}'.format(broker_address, db, collection, func_name)
+        item = find(mongod_port, db, col, filter)
+        url = 'http://{}/check_function_termination/{}/{}/{}'.format(item['address'], db, col, func_name)
         data = {"filter_json": dumps(filter)}
         try:
-            res = requests.post(url, files={}, data=data, headers={"Authorization": password})
+            res = requests.post(url, files={}, data=data, headers={"Authorization": password}).json()
             if res['status'] is True:
-                jobs[filteritems].terminate()
+                logger.info("Terminated function {} {}".format(func_name, filter))
+                process.terminate()
         except:
             logger.info("check_brokerworker_termination error")
 
@@ -82,8 +90,13 @@ class P2PClientworkerApp(P2PFlaskApp):
                                                          mongod_port=mongod_port,
                                                          registry_functions=self.registry_functions))
         self.register_time_regular_func(partial(check_brokerworker_termination,
-                                                         mongod_port=mongod_port,
-                                                         registry_functions=self.registry_functions))
+                                                         self.jobs, self.mongod_port, self.crypt_pass))
+
+    def start_local(self, newf, filter_, db, col, funcname):
+        process = multiprocessing.Process(target=newf)
+        process.daemon = True
+        process.start()
+        self.jobs[frozenset(filter_.items())] = (process, db, col, funcname)
 
     def register_p2p_func(self, can_do_work_func):
         """
@@ -143,9 +156,7 @@ class P2PClientworkerApp(P2PFlaskApp):
                             logging_queue=self._logging_queue if not is_debug_mode() else None,
                             password=self.crypt_pass))
 
-                self.jobs[frozenset(filter_.items())] = multiprocessing.Process(target=new_f)
-                # _ = function_executor(f, filter_, db, col, db_url, key_interpreter, self._logging_queue)
-                # something weird was happening with logging when the function was executed in the same thread
+                self.start_local(new_f, filter_, db, col, f.__name__)
 
             self.register_time_regular_func(wrap)
             return None

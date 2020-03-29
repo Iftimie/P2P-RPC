@@ -7,3 +7,4 @@ mmh3
 passlib
 requests
 deprecated
+psutil

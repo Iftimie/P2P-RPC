@@ -31,6 +31,8 @@ def call_remote_func(ip, port, db, col, func_name, filter, password):
     url = "http://{ip}:{port}/execute_function/{db}/{col}/{fname}".format(ip=ip, port=port, db=db, col=col,
                                                                           fname=func_name)
     res = requests.post(url, files={}, data=data, headers={"Authorization": password})
+    if res.status_code == 404 and b'Filter not found' in res.content:
+        raise ValueError("Filter not found {} on broker {} {}".format(filter, ip, port))
     return res
 
 
@@ -91,15 +93,29 @@ def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_
         raise e
     return update_
 
-
+import psutil
 def route_terminate_function(mongod_port, db, col, self):
+    logger = logging.getLogger(__name__)
+
     filter = loads(request.form['filter_json'])
     jobkey = frozenset(filter.items())
+    print(jobkey)
+    #TODO OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO
+    # https://docs.python.org/2/library/multiprocessing.html use the server process manager.dict
+    print("PERSISTENT route_terminate_function", jobkey in self.jobs)
     if jobkey in self.jobs:
-        if self.jobs[jobkey].is_alive():
-            self.jobs[jobkey].terminate()
+        pid = self.jobs[jobkey]
+        if psutil.pid_exists(pid):
+            print("gets here")
+            p = psutil.Process()
+            print("then here")
+            p.terminate()
+            logger.info("Terminated job {}".format(filter))
+        logger.info("job {} already terminated".format(filter))
     else: # must be a clientworker that is doing the job
         MongoClient(port=mongod_port)[db][col].update_one(filter, {"$set": {"kill_clientworker": True}})
+        logger.info("job is on clientworker {} added notification".format(filter))
+    return make_response("ok", 200)
 
 
 def route_check_function_termination(mongod_port, db, col):
@@ -135,6 +151,10 @@ def route_execute_function(f, mongod_port, db, col, key_interpreter, can_do_loca
 
     filter = loads(request.form['filter_json'])
 
+    items = find(mongod_port, db, col, filter, key_interpreter)
+    if len(items) == 0:
+        return make_response("Filter not found {} on broker".format(filter), 404)
+
     if can_do_locally_func():
         new_f = wraps(f)(
             partial(function_executor,
@@ -146,10 +166,13 @@ def route_execute_function(f, mongod_port, db, col, key_interpreter, can_do_loca
                     logging_queue=self._logging_queue if not is_debug_mode() else None,
                     password=self.crypt_pass))
         p = Process(target=new_f)
+        p.daemon = True
         p.start()
         # res = self.worker_pool.apply_async(func=new_f)
         MongoClient(port=mongod_port)[db][col].update_one(filter, {"$set": {"started": f.__name__}})
-        self.jobs[frozenset(filter.items())] = p
+        print("PERSISTENT", frozenset(filter.items()) in self.jobs)
+        self.jobs[frozenset(filter.items())] = p.pid
+        print(list(self.jobs.keys()))
     else:
         logger.info("Cannot execute function now: " + f.__name__)
 
@@ -238,7 +261,7 @@ def route_registered_functions(registry_functions):
     current_items = {fname: {"bytecode": db_encoder[Callable](f['original_func'])} for fname, f in registry_functions.items()}
     return jsonify(current_items)
 
-
+import multiprocessing
 class P2PBrokerworkerApp(P2PFlaskApp):
 
     def __init__(self, discovery_ips_file, cache_path, local_port=5001, mongod_port=5101, password="", old_requests_time_limit=23, include_finished=True):
@@ -247,7 +270,14 @@ class P2PBrokerworkerApp(P2PFlaskApp):
                                                  cache_path=cache_path, password=password)
         self.roles.append("brokerworker")
         self.registry_functions = defaultdict(dict)
-        self.jobs = dict()
+
+        # FIXME this if else statement in case of debug mode was introduced just for an unfortunated combination of OS
+        #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaegr
+        if is_debug_mode():
+            self.jobs = dict()
+        else:
+            self.managerjobs = multiprocessing.Manager()
+            self.jobs = self.managerjobs.dict()
         self.register_time_regular_func(partial(delete_old_requests,
                                                 mongod_port=mongod_port,
                                                 registry_functions=self.registry_functions,

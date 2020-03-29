@@ -18,6 +18,7 @@ setuptools.setup(
         'passlib',
         'requests',
         'deprecated',
+        'psutil',
       ],
 
     keywords=['object', 'detection', 'truck']

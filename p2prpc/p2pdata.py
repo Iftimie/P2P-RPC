@@ -437,7 +437,6 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
         filter_json = dumps(filter)
         hint_file_keys_json = dumps(hint_file_keys)
 
-
         try:
             data_to_send = {"req_keys_json": req_keys_json, "filter_json": filter_json, "hint_file_keys_json": hint_file_keys_json}
             url = "http://{}/pull_update_one/{}/{}".format(node, db, col)
