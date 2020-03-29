@@ -113,9 +113,9 @@ def default_saving_func(filepath, item):
     pickle.dump(item, open(filepath, 'wb'))
 
 
-def p2p_save(key, item, saving_func=default_saving_func):
+def p2p_save(key, item, filesuffix=".pkl", saving_func=default_saving_func):
     actual_args = find_required_args()
-    fp = p2p_getfilepath()
+    fp = p2p_getfilepath(suffix=filesuffix)
     document = {key: fp}
     saving_func(fp, item)
     update_one(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], document, upsert=False)
@@ -134,8 +134,8 @@ def p2p_load(key, loading_func=default_loading_func):
         return None
 
 
-def p2p_getfilepath():
-    filepath = tempfile.mkstemp(suffix="", dir=None, text=False)[1]
+def p2p_getfilepath(suffix):
+    filepath = tempfile.mkstemp(suffix=suffix, dir=None, text=False)[1]
     actual_args = find_required_args()
     key = "tmpfile"
     item = find(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], actual_args['key_interpreter'])[0]
@@ -356,7 +356,8 @@ class P2PClientApp(P2PFlaskApp):
         self.background_server = None
         self.registry_functions = defaultdict(dict)
 
-    def create_future(self, f, identifier,  db, col, key_interpreter):
+    def create_future(self, f, identifier):
+        key_interpreter, db, col = derive_vars_from_function(f)
         item = find(self.mongod_port, db, col, {"identifier": identifier}, key_interpreter)[0]
         if item['nodes'] or 'remote_identifier' in item:
             filter = {"identifier": identifier, "remote_identifier": item['remote_identifier']}
@@ -399,7 +400,7 @@ class P2PClientApp(P2PFlaskApp):
                 expected_keys = get_expected_keys(f)
                 if identifier_seen(self.mongod_port, identifier, db, col, expected_keys, key_interpreter):
                     logger.info("Returning future that may already be precomputed")
-                    return self.create_future(f, identifier, db, col, key_interpreter)
+                    return self.create_future(f, identifier)
 
                 validate_arguments(f, args, kwargs)
                 kwargs.update(expected_keys)
@@ -440,7 +441,7 @@ class P2PClientApp(P2PFlaskApp):
                     filter = {"identifier": identifier, "remote_identifier": kwargs['remote_identifier']}
                     call_remote_func(lru_ip, lru_port, db, col, f.__name__, filter, self.crypt_pass)
                     logger.info("Dispacthed function work to {},{}".format(lru_ip, lru_port))
-                return self.create_future(f, identifier, db, col, key_interpreter)
+                return self.create_future(f, identifier)
 
             return wrap
 
