@@ -107,9 +107,14 @@ def route_terminate_function(mongod_port, db, col, self):
         pid = self.jobs[jobkey]
         if psutil.pid_exists(pid):
             print("gets here")
-            p = psutil.Process()
+            p = psutil.Process(pid)
             print("then here")
-            p.terminate()
+            try:
+                p.terminate()
+            except Exception as e:
+                print("asdasdasd")
+                traceback.print_exc()
+                pass
             logger.info("Terminated job {}".format(filter))
         logger.info("job {} already terminated".format(filter))
     else: # must be a clientworker that is doing the job
@@ -165,7 +170,7 @@ def route_execute_function(f, mongod_port, db, col, key_interpreter, can_do_loca
                     #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
                     logging_queue=self._logging_queue if not is_debug_mode() else None,
                     password=self.crypt_pass))
-        p = Process(target=new_f)
+        p = Process(target=new_f, daemon=True)
         p.daemon = True
         p.start()
         # res = self.worker_pool.apply_async(func=new_f)

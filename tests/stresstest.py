@@ -479,7 +479,7 @@ def function_restart_unfinished_upload_on_broker(tmpdir, port_offset, func):
 
 
 def long_function_upload2(file_handle: io.IOBase) -> {"results": str}:
-    time.sleep(100)
+    time.sleep(10)
     return {"results": "ok"}
 
 
@@ -553,7 +553,7 @@ if __name__ == "__main__":
     # function_crash_on_clientworker_test(clean_and_create(), 1510, func=crashing_function,
     #                     file=__file__)
     # function_restart_unfinished_upload_on_broker(clean_and_create(), 1510, func=long_function_upload)
-    function_restart_on_broker(clean_and_create(), 110, func=long_function_upload2)
+    function_restart_on_broker(clean_and_create(), 150, func=long_function_upload2)
     # TODO I still need to test what happens to a request when it remains unsolved due to outside factors (power drop)
     #  and not internal function errors that can be catched
 
