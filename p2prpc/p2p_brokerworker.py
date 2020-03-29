@@ -34,6 +34,15 @@ def call_remote_func(ip, port, db, col, func_name, filter, password):
     return res
 
 
+def terminate_remote_func(ip, port, db, col, func_name, filter, password):
+    data = {"filter_json": dumps(filter)}
+
+    url = "http://{ip}:{port}/terminate_function/{db}/{col}/{fname}".format(ip=ip, port=port, db=db, col=col,
+                                                                          fname=func_name)
+    res = requests.post(url, files={}, data=data, headers={"Authorization": password})
+    return res
+
+
 def check_remote_identifier(ip, port, db, col, func_name, identifier, password):
     url = "http://{ip}:{port}/identifier_available/{db}/{col}/{fname}/{identifier}".format(ip=ip, port=port, db=db,
                                                                                      col=col, fname=func_name,
@@ -83,6 +92,25 @@ def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_
     return update_
 
 
+def route_terminate_function(mongod_port, db, col, self):
+    filter = loads(request.form['filter_json'])
+    jobkey = frozenset(filter.items())
+    if jobkey in self.jobs:
+        if self.jobs[jobkey].is_alive():
+            self.jobs[jobkey].terminate()
+    else: # must be a clientworker that is doing the job
+        MongoClient(port=mongod_port)[db][col].update_one(filter, {"$set": {"kill_clientworker": True}})
+
+
+def route_check_function_termination(mongod_port, db, col):
+    filter = loads(request.form['filter_json'])
+    item = find(mongod_port, db, col, filter)[0]
+    if "kill_clientworker" in item and item['kill_clientworker'] is True:
+        return jsonify({"status": True})
+    else:
+        return jsonify({"status": False})
+
+
 def route_execute_function(f, mongod_port, db, col, key_interpreter, can_do_locally_func, self):
     """
     Function designed to be decorated with flask.app.route
@@ -121,7 +149,7 @@ def route_execute_function(f, mongod_port, db, col, key_interpreter, can_do_loca
         p.start()
         # res = self.worker_pool.apply_async(func=new_f)
         MongoClient(port=mongod_port)[db][col].update_one(filter, {"$set": {"started": f.__name__}})
-        self.list_processes.append(p)
+        self.jobs[frozenset(filter.items())] = p
     else:
         logger.info("Cannot execute function now: " + f.__name__)
 
@@ -219,7 +247,7 @@ class P2PBrokerworkerApp(P2PFlaskApp):
                                                  cache_path=cache_path, password=password)
         self.roles.append("brokerworker")
         self.registry_functions = defaultdict(dict)
-        self.list_processes = []
+        self.jobs = dict()
         self.register_time_regular_func(partial(delete_old_requests,
                                                 mongod_port=mongod_port,
                                                 registry_functions=self.registry_functions,
@@ -271,12 +299,24 @@ class P2PBrokerworkerApp(P2PFlaskApp):
             self.route("/pull_update_one/{db}/{col}".format(db=db, col=col), methods=['POST'])(
                 p2p_route_pull_update_one_func)
 
-            execute_function_partial = wraps(f)(
+            execute_function_partial = wraps(route_execute_function)(
                 partial(self.pass_req_dec(route_execute_function),
                         f=f, mongod_port=self.mongod_port, db=db, col=col,
                         key_interpreter=key_interpreter, can_do_locally_func=can_do_locally_func, self=self))
             self.route('/execute_function/{db}/{col}/{fname}'.format(db=db, col=col, fname=f.__name__),
                        methods=['POST'])(execute_function_partial)
+
+            terminate_function_partial = wraps(route_terminate_function)(
+                partial(self.pass_req_dec(route_terminate_function),
+                        mongod_port=self.mongod_port, db=db, col=col, self=self))
+            self.route('/terminate_function/{db}/{col}/{fname}'.format(db=db, col=col, fname=f.__name__),
+                       methods=['POST'])(terminate_function_partial)
+
+            check_function_termination_partial = wraps(route_check_function_termination)(
+                partial(self.pass_req_dec(route_check_function_termination),
+                        mongod_port=self.mongod_port, db=db, col=col))
+            self.route('/check_function_termination/{db}/{col}/{fname}'.format(db=db, col=col, fname=f.__name__),
+                       methods=['POST'])(check_function_termination_partial)
 
             search_work_partial = wraps(route_search_work)(
                 partial(self.pass_req_dec(route_search_work),

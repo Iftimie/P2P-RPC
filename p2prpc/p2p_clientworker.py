@@ -55,6 +55,19 @@ def find_response_with_work(local_port, db, collection, func_name, password):
     return res_json, res_broker_ip, res_broker_port
 
 
+def check_brokerworker_termination(jobs):
+    for filteritems in jobs:
+        filter = {k: v for k, v in filteritems}
+        url = 'http://{}/check_function_termination/{}/{}/{}'.format(broker_address, db, collection, func_name)
+        data = {"filter_json": dumps(filter)}
+        try:
+            res = requests.post(url, files={}, data=data, headers={"Authorization": password})
+            if res['status'] is True:
+                jobs[filteritems].terminate()
+        except:
+            logger.info("check_brokerworker_termination error")
+
+
 class P2PClientworkerApp(P2PFlaskApp):
 
     def __init__(self, discovery_ips_file, cache_path, local_port=5002, mongod_port=5102, password=""):
@@ -64,9 +77,11 @@ class P2PClientworkerApp(P2PFlaskApp):
                                                  cache_path=cache_path, password=password)
         self.roles.append("clientworker")
         self.registry_functions = defaultdict(dict)
-        self.worker_pool = multiprocessing.Pool(2)
-        self.list_futures = []
+        self.jobs = dict()
         self.register_time_regular_func(partial(delete_old_requests,
+                                                         mongod_port=mongod_port,
+                                                         registry_functions=self.registry_functions))
+        self.register_time_regular_func(partial(check_brokerworker_termination,
                                                          mongod_port=mongod_port,
                                                          registry_functions=self.registry_functions))
 
@@ -127,8 +142,8 @@ class P2PClientworkerApp(P2PFlaskApp):
                             #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
                             logging_queue=self._logging_queue if not is_debug_mode() else None,
                             password=self.crypt_pass))
-                res = self.worker_pool.apply_async(func=new_f)
-                self.list_futures.append(res)
+
+                self.jobs[frozenset(filter_.items())] = multiprocessing.Process(target=new_f)
                 # _ = function_executor(f, filter_, db, col, db_url, key_interpreter, self._logging_queue)
                 # something weird was happening with logging when the function was executed in the same thread
 

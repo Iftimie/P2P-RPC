@@ -5,7 +5,7 @@ from .p2pdata import p2p_push_update_one, p2p_insert_one
 from .p2pdata import p2p_pull_update_one, deserialize_doc_from_net
 import logging
 from .base import self_is_reachable
-from .p2p_brokerworker import call_remote_func, function_executor
+from .p2p_brokerworker import call_remote_func, function_executor, terminate_remote_func
 import multiprocessing
 import io
 from .base import wait_until_online
@@ -197,18 +197,19 @@ def get_local_future(f, identifier, cache_path, mongod_port, db, col, key_interp
 
 class Future:
 
-    def __init__(self, get_future_func, restart_func):
-        self.get_future_func = get_future_func
-        self.restart_func = restart_func
+    def __init__(self, get_future_func, restart_func, terminate_func):
+        self.__get_future_func = get_future_func
+        self.__restart_func = restart_func
+        self.__terminate_func = terminate_func
 
     def get(self, timeout=3600*24):
         logger = logging.getLogger(__name__)
 
-        item = self.get_future_func()
+        item = self.__get_future_func()
         count_time = 0
         wait_time = 4
         while any(item[k] is None for k in item):
-            item = self.get_future_func()
+            item = self.__get_future_func()
             if 'error' in item and item['error'] != '':
                 raise Exception(str(item))
             time.sleep(wait_time)
@@ -219,7 +220,8 @@ class Future:
         return item
 
     def restart(self):
-        self.restart_func()
+        self.__terminate_current()
+        self.__restart_func()
 
 
 def get_expected_keys(f):
@@ -352,9 +354,19 @@ class P2PClientApp(P2PFlaskApp):
         super(P2PClientApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
                                                  cache_path=cache_path, password=password)
         self.roles.append("client")
-        self.worker_pool = multiprocessing.Pool(1)
+        self.jobs = dict()
         self.background_server = None
         self.registry_functions = defaultdict(dict)
+
+    def start_local(self, newf, identifier):
+        p = multiprocessing.Process(target=newf)
+        p.daemon = True
+        p.start()
+        self.jobs[identifier] = p
+
+    def terminate_local(self, identifier):
+        if identifier in self.jobs and self.jobs[identifier].is_alive():
+            self.jobs[identifier].terminate()
 
     def create_future(self, f, identifier):
         key_interpreter, db, col = derive_vars_from_function(f)
@@ -363,7 +375,8 @@ class P2PClientApp(P2PFlaskApp):
             filter = {"identifier": identifier, "remote_identifier": item['remote_identifier']}
             return Future(
                 partial(get_remote_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter, self.crypt_pass),
-                restart_func=partial(call_remote_func, item["ip"], item["port"], db, col, f.__name__, filter, self.crypt_pass))
+                restart_func=partial(call_remote_func, item["ip"], item["port"], db, col, f.__name__, filter, self.crypt_pass),
+                terminate_func=partial(terminate_remote_func, item["ip"], item["port"], db, col, f.__name__, filter, self.crypt_pass))
         else:
             new_f = wraps(f)(partial(function_executor, f=f, filter={'identifier': item['identifier']},
                                      mongod_port=self.mongod_port, db=db, col=col,
@@ -371,7 +384,8 @@ class P2PClientApp(P2PFlaskApp):
                                      logging_queue=self._logging_queue if not is_debug_mode() else None,
                                      password=self.crypt_pass))
             return Future(partial(get_local_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter),
-                          restart_func=partial(self.worker_pool.apply_async, new_f))
+                          restart_func=partial(self.start_local, new_f, identifier),
+                          terminate_func=partial(self.terminate_local, identifier))
 
     def register_p2p_func(self, can_do_locally_func=lambda: False):
         """
@@ -418,19 +432,11 @@ class P2PClientApp(P2PFlaskApp):
                                              #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
                                              logging_queue=self._logging_queue if not is_debug_mode() else None,
                                              password=self.crypt_pass))
-                    res = self.worker_pool.apply_async(func=new_f)
+                    self.start_local(new_f, kwargs['identifier'])
                     logger.info("Executing function locally")
                 else:
+                    # TODO put all of this in a job
                     nodes = [str(lru_ip) + ":" + str(lru_port)]
-                    # TODO check if the item was allready sent for processing
-
-                    # This is a bit messy about remote identifier and local identifier (not sure what is the best way to solve
-                    # identifier collisions on server
-                    # TODO to solve this messy remote identifier stuff, the route_execute_function should actually receive
-                    #  an arbitrary filter (that may or may not contain the identifier keyword)
-                    #  or It shoudl contain both identifier and remote identifier
-                    #  which would also solve another TODO from route_execute_function
-                    #  the current node should pull the identifier that the worker created and use it to filter the next time the arguments
                     kwargs['remote_identifier'] = create_remote_identifier(kwargs['identifier'],
                                                                            {"ip": lru_ip, "port": lru_port, "db": db,
                                                                             "col": col, "func_name": f.__name__,
