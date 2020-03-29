@@ -8,3 +8,4 @@ truckms.egg-info/
 examples/brokerworkerdb
 examples/clientdb
 examples/clientworkerdb
+p2prpc.egg-info/

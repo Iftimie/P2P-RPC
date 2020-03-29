@@ -1,4 +1,4 @@
-from .base import P2PFlaskApp, create_bookkeeper_p2pblueprint
+from .base import P2PFlaskApp, create_bookkeeper_p2pblueprint, is_debug_mode
 from functools import wraps
 from functools import partial
 from .p2pdata import p2p_insert_one
@@ -6,7 +6,7 @@ from .p2pdata import p2p_pull_update_one, deserialize_doc_from_net
 import inspect
 import io
 import os
-from .p2p_brokerworker import function_executor, delete_old_finished_requests
+from .p2p_brokerworker import function_executor, delete_old_requests
 from . import p2p_brokerworker
 from .base import derive_vars_from_function
 from .base import configure_logger
@@ -62,10 +62,11 @@ class P2PClientworkerApp(P2PFlaskApp):
                                                             (p2p_brokerworker.__name__, 'INFO')])
         super(P2PClientworkerApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
                                                  cache_path=cache_path, password=password)
+        self.roles.append("clientworker")
         self.registry_functions = defaultdict(dict)
         self.worker_pool = multiprocessing.Pool(2)
         self.list_futures = []
-        self.register_time_regular_func(partial(delete_old_finished_requests,
+        self.register_time_regular_func(partial(delete_old_requests,
                                                          mongod_port=mongod_port,
                                                          registry_functions=self.registry_functions))
 
@@ -84,6 +85,8 @@ class P2PClientworkerApp(P2PFlaskApp):
             key_interpreter, db, col = derive_vars_from_function(f)
 
             self.registry_functions[f.__name__]['key_interpreter'] = key_interpreter
+            self.registry_functions[f.__name__]['original_func'] = f
+
 
             updir = os.path.join(self.cache_path, db, col)  # upload directory
             os.makedirs(updir, exist_ok=True)
@@ -120,7 +123,9 @@ class P2PClientworkerApp(P2PFlaskApp):
                             f=f, filter=filter_,
                             mongod_port=self.mongod_port, db=db, col=col,
                             key_interpreter=key_interpreter,
-                            logging_queue=self._logging_queue,
+                            # FIXME this if statement in case of debug mode was introduced just for an unfortunated combination of OS
+                            #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
+                            logging_queue=self._logging_queue if not is_debug_mode() else None,
                             password=self.crypt_pass))
                 res = self.worker_pool.apply_async(func=new_f)
                 self.list_futures.append(res)

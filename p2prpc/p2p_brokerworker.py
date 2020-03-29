@@ -1,10 +1,8 @@
 import requests
-from .base import P2PFlaskApp, create_bookkeeper_p2pblueprint
-import multiprocessing
+from .base import P2PFlaskApp, is_debug_mode
 from flask import make_response, jsonify
 from .base import derive_vars_from_function
 import time
-from .p2pdata import password_required
 from flask import request
 from functools import wraps, partial
 from .p2pdata import p2p_route_insert_one, deserialize_doc_from_net, p2p_route_pull_update_one, \
@@ -16,10 +14,12 @@ import logging
 from json import dumps, loads
 from .base import configure_logger
 from collections import defaultdict
-from passlib.hash import sha256_crypt
 import os
 from .p2pdata import deserialize_doc_from_db
-from .registry_args import remove_values_from_doc
+from .registry_args import remove_values_from_doc, db_encoder
+from multiprocessing import Process
+import traceback
+from collections import Callable
 
 
 def call_remote_func(ip, port, db, col, func_name, filter, password):
@@ -48,11 +48,14 @@ def check_remote_identifier(ip, port, db, col, func_name, identifier, password):
 
 
 def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_queue, password):
-    qh = logging.handlers.QueueHandler(logging_queue)
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
     root.handlers = []
-    root.addHandler(qh)
+    if logging_queue is not None:
+        # FIXME this if statement in case of debug mode was introduced just for an unfortunated combination of OS
+        #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
+        qh = logging.handlers.QueueHandler(logging_queue)
+        root.addHandler(qh)
 
     logger = logging.getLogger(__name__)
 
@@ -60,18 +63,18 @@ def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_
     kwargs = {k: kwargs_[k] for k in inspect.signature(f).parameters.keys()}
 
     logger.info("Executing function: " + f.__name__)
-    print(kwargs)
     try:
         update_ = f(**kwargs)
     except Exception as e:
-        logger.error("Function execution crashed for filter: {}".format(str(filter)), exc_info=True)
+        log_message = "Function execution crashed for filter: {}\n".format(str(filter)) + traceback.format_exc()
+        logger.error(log_message)
+        p2p_push_update_one(mongod_port, db, col, filter, {"error": log_message}, password=password)
         raise e
     logger.info("Finished executing function: " + f.__name__)
     update_['finished'] = True
     update_['progress'] = 100.0
     if not all(isinstance(k, str) for k in update_.keys()):
         raise ValueError("All keys in the returned dictionary must be strings in func {}".format(f.__name__))
-
     try:
         p2p_push_update_one(mongod_port, db, col, filter, update_, password=password)
     except Exception as e:
@@ -110,11 +113,15 @@ def route_execute_function(f, mongod_port, db, col, key_interpreter, can_do_loca
                     f=f, filter=filter,
                     mongod_port=mongod_port, db=db, col=col,
                     key_interpreter=key_interpreter,
-                    logging_queue=self._logging_queue,
+                    # FIXME this if statement in case of debug mode was introduced just for an unfortunated combination of OS
+                    #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
+                    logging_queue=self._logging_queue if not is_debug_mode() else None,
                     password=self.crypt_pass))
-        res = self.worker_pool.apply_async(func=new_f)
+        p = Process(target=new_f)
+        p.start()
+        # res = self.worker_pool.apply_async(func=new_f)
         MongoClient(port=mongod_port)[db][col].update_one(filter, {"$set": {"started": f.__name__}})
-        self.list_futures.append(res)
+        self.list_processes.append(p)
     else:
         logger.info("Cannot execute function now: " + f.__name__)
 
@@ -164,6 +171,7 @@ def route_identifier_available(mongod_port, db, col, identifier):
     else:
         return make_response("no", 404)
 
+
 def heartbeat(mongod_port, db="tms"):
     """
     Pottential vulnerability from flooding here
@@ -173,38 +181,50 @@ def heartbeat(mongod_port, db="tms"):
     return make_response("Thank god you are alive", 200)
 
 
-def delete_old_finished_requests(mongod_port, registry_functions, time_limit=24):
+def delete_old_requests(mongod_port, registry_functions, time_limit=24, include_finished=True):
     db = MongoClient(port=mongod_port)['p2p']
     collection_names = set(db.collection_names()) - {"_default"}
     for col_name in collection_names:
         key_interpreter_dict = registry_functions[col_name]['key_interpreter']
 
         col_items = list(db[col_name].find({}))
-        col_items = filter(lambda item: "finished" in item, col_items)
+        if include_finished:
+            col_items = filter(lambda item: "finished" in item, col_items)
         col_items = filter(lambda item: (time.time() - item['timestamp']) > time_limit * 3600, col_items)
 
         for item in col_items:
             if (time.time() - item['timestamp']) > time_limit * 3600:
                 document = deserialize_doc_from_db(item, key_interpreter_dict)
                 remove_values_from_doc(document)
+
+                #TODO refactor this somehow
+                for k in item:
+                    if "tmpfile" in k:
+                        os.remove(item[k])
+
                 db[col_name].remove(item)
+
+
+
+def route_registered_functions(registry_functions):
+    current_items = {fname: {"bytecode": db_encoder[Callable](f['original_func'])} for fname, f in registry_functions.items()}
+    return jsonify(current_items)
 
 
 class P2PBrokerworkerApp(P2PFlaskApp):
 
-    def __init__(self, discovery_ips_file, cache_path, local_port=5001, mongod_port=5101, password="", old_requests_time_limit=23):
+    def __init__(self, discovery_ips_file, cache_path, local_port=5001, mongod_port=5101, password="", old_requests_time_limit=23, include_finished=True):
         configure_logger("brokerworker", module_level_list=[(__name__, 'DEBUG')])
         super(P2PBrokerworkerApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
                                                  cache_path=cache_path, password=password)
         self.roles.append("brokerworker")
         self.registry_functions = defaultdict(dict)
-        self.pass_req_dec = password_required(password)
-        self.worker_pool = multiprocessing.Pool(2)
-        self.list_futures = []
-        self.register_time_regular_func(partial(delete_old_finished_requests,
+        self.list_processes = []
+        self.register_time_regular_func(partial(delete_old_requests,
                                                 mongod_port=mongod_port,
                                                 registry_functions=self.registry_functions,
-                                                time_limit=old_requests_time_limit))
+                                                time_limit=old_requests_time_limit,
+                                                include_finished=include_finished))
 
     def register_p2p_func(self, can_do_locally_func=lambda: True, time_limit=12):
         """
@@ -225,6 +245,7 @@ class P2PBrokerworkerApp(P2PFlaskApp):
             key_interpreter, db, col = derive_vars_from_function(f)
 
             self.registry_functions[f.__name__]['key_interpreter'] = key_interpreter
+            self.registry_functions[f.__name__]['original_func'] = f
 
             updir = os.path.join(self.cache_path, db, col)  # upload directory
             os.makedirs(updir, exist_ok=True)
@@ -269,5 +290,10 @@ class P2PBrokerworkerApp(P2PFlaskApp):
                         mongod_port=self.mongod_port, db=db, col=col))
             self.route("/identifier_available/{db}/{col}/{fname}/<identifier>".format(db=db, col=col, fname=f.__name__),
                        methods=['GET'])(identifier_available_partial)
+
+            registered_functions_partial = wraps(route_registered_functions)(
+                partial(self.pass_req_dec(route_registered_functions),
+                        registry_functions=self.registry_functions))
+            self.route("/registered_functions/", methods=['GET'])(registered_functions_partial)
 
         return inner_decorator

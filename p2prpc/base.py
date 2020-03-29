@@ -1,11 +1,11 @@
 from logging.config import dictConfig
 from typing import List
-from flask import Flask, Blueprint, make_response
+from flask import Flask, Blueprint, make_response, request
 import time
 import threading
 import logging
 import requests
-from .bookkeeper import node_states, update_function
+from .bookkeeper import route_node_states, update_function
 import io
 from warnings import warn
 import collections
@@ -21,6 +21,7 @@ import os
 import subprocess
 from passlib.hash import sha256_crypt
 import pymongo
+import sys
 logger = logging.getLogger(__name__)
 
 
@@ -40,11 +41,11 @@ def echo():
     return make_response("I exist", 200)
 
 
-def wait_until_online(local_port):
+def wait_until_online(local_port, password):
     # while the app is not alive yet
     while True:
         try:
-            response = requests.get('http://{}:{}/echo'.format('localhost', local_port))
+            response = requests.get('http://{}:{}/echo'.format('localhost', local_port), headers={'Authorization': password})
             if response.status_code == 200:
                 break
         except:
@@ -96,7 +97,7 @@ class P2PBlueprint(Blueprint):
         return decorated_function_catcher
 
 
-def create_bookkeeper_p2pblueprint(local_port: int, app_roles: List[str], discovery_ips_file: str, mongod_port) -> P2PBlueprint:
+def create_bookkeeper_p2pblueprint(local_port: int, app_roles: List[str], discovery_ips_file: str, mongod_port, password: str) -> P2PBlueprint:
     """
     Creates the bookkeeper blueprint
 
@@ -110,10 +111,10 @@ def create_bookkeeper_p2pblueprint(local_port: int, app_roles: List[str], discov
         P2PBluePrint
     """
     bookkeeper_bp = P2PBlueprint("bookkeeper_bp", __name__, role="bookkeeper")
-    func = (wraps(node_states)(partial(node_states, mongod_port)))
-    bookkeeper_bp.route("/node_states", methods=['POST', 'GET'])(func)
+    decorated_route_node_states = (wraps(route_node_states)(partial(route_node_states, mongod_port)))
+    bookkeeper_bp.route("/node_states", methods=['POST', 'GET'])(decorated_route_node_states)
 
-    time_regular_func = partial(update_function, local_port, app_roles, discovery_ips_file)
+    time_regular_func = partial(update_function, local_port, app_roles, discovery_ips_file, password)
     bookkeeper_bp.register_time_regular_func(time_regular_func)
 
     return bookkeeper_bp
@@ -128,6 +129,25 @@ def wait_for_mongo_online(mongod_port):
         except:
             logger.info("Mongod not online yet")
             continue
+
+
+def is_debug_mode():
+    gettrace = getattr(sys, 'gettrace', None)
+    if gettrace is None:
+        return False
+    elif gettrace():
+        return True
+
+
+def password_required(password):
+    def internal_decorator(f):
+        @wraps(f)
+        def wrap(*args, **kwargs):
+            if not sha256_crypt.verify(password, request.headers.get('Authorization')):
+                return make_response("Unauthorized", 401)
+            return f(*args, **kwargs)
+        return wrap
+    return internal_decorator
 
 
 class P2PFlaskApp(Flask):
@@ -153,8 +173,14 @@ class P2PFlaskApp(Flask):
         self.roles = []
         self._blueprints = {}
         self._time_regular_funcs = []
+        # FIXME this if else statement in case of debug mode was introduced just for an unfortunated combination of OS
+        #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaegr
+        if is_debug_mode():
+            self._logging_queue = multiprocessing.Queue()
+        else:
+            self.manager = multiprocessing.Manager()
+            self._logging_queue = self.manager.Queue()
         self._time_regular_thread = None
-        self._logging_queue = multiprocessing.Manager().Queue()
         self._logger_thread = None
         self._stop_thread = False
         self._time_interval = 10
@@ -167,17 +193,19 @@ class P2PFlaskApp(Flask):
         self.password = password
         self.discovery_ips_file = discovery_ips_file
         self.crypt_pass = sha256_crypt.encrypt(password)
+        self.pass_req_dec = password_required(password)
 
         if not os.path.isabs(cache_path):
             raise ValueError("cache_path must be absolute {}".format(cache_path))
         if not os.path.exists(cache_path):
             os.mkdir(cache_path)
 
-        self.route("/echo", methods=['GET'])(echo)
+        self.route("/echo", methods=['GET'])(self.pass_req_dec(echo))
 
         bookkeeper_bp = create_bookkeeper_p2pblueprint(local_port=self.local_port,
                                                        app_roles=self.roles,
-                                                       discovery_ips_file=self.discovery_ips_file, mongod_port=self.mongod_port)
+                                                       discovery_ips_file=self.discovery_ips_file, mongod_port=self.mongod_port,
+                                                       password=self.crypt_pass)
         self.register_blueprint(bookkeeper_bp)
 
     def add_url_rule(self, rule, endpoint=None, view_func=None, **options):
@@ -205,13 +233,13 @@ class P2PFlaskApp(Flask):
     # TODO I should also implement the shutdown method that will close the time_regular_thread
 
 
-    def _time_regular(self, list_funcs, time_interval, local_port, stop_thread):
+    def _time_regular(self, list_funcs, time_interval, local_port, stop_thread, password):
         # while the app is not alive it
         count = 0
         max_trials = 10
         while count < max_trials:
             try:
-                response = requests.get('http://{}:{}/echo'.format('localhost', local_port))
+                response = requests.get('http://{}:{}/echo'.format('localhost', local_port), headers={"Authorization": password})
                 if response.status_code == 200:
                     break
             except:
@@ -267,7 +295,7 @@ class P2PFlaskApp(Flask):
         self._time_regular_thread = threading.Thread(target=self._time_regular,
                                                      args=(
                                                          self._time_regular_funcs, self._time_interval, self.local_port,
-                                                         lambda: self._stop_thread))
+                                                         lambda: self._stop_thread, self.crypt_pass))
         self._time_regular_thread.start()
 
     def stop_background_threads(self):
@@ -407,6 +435,8 @@ def validate_function_signature(func):
     formal_args = list(inspect.signature(func).parameters.keys())
     if any(key in formal_args for key in ["identifier", "nodes", "timestamp"]):
         raise ValueError("identifier, nodes, timestamp are restricted keywords in this p2p framework")
+    if any("tmpfile" in k for k in formal_args):
+        raise ValueError("tmpfile is a restricted substring in argument names in this p2p framework")
 
     return_anno = inspect.signature(func).return_annotation
     if not "return" in inspect.getsource(func):

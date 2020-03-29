@@ -17,6 +17,7 @@ from passlib.hash import sha256_crypt
 from .registry_args import serialize_doc_for_db
 from .registry_args import deserialize_doc_from_db
 from pymongo import MongoClient
+from p2prpc.streaming import DataFilesReceiver, DataFilesStreamer
 
 
 def zip_files(files):
@@ -125,18 +126,6 @@ def deserialize_doc_from_net(files, json, up_dir, key_interpreter=None):
     data = deserialize_doc_from_db(data, key_interpreter)
     return data
 
-
-def password_required(password):
-    def internal_decorator(f):
-        @wraps(f)
-        def wrap(*args, **kwargs):
-            if not sha256_crypt.verify(password, request.headers.get('Authorization')):
-                return make_response("Unauthorized", 401)
-            return f(*args, **kwargs)
-        return wrap
-    return internal_decorator
-
-
 def p2p_route_insert_one(mongod_port, db, col, deserializer=deserialize_doc_from_net):
     """
     Function designed to be decorated with flask.app.route
@@ -153,12 +142,13 @@ def p2p_route_insert_one(mongod_port, db, col, deserializer=deserialize_doc_from
     Returns:
         flask Response
     """
-    if request.files:
-        filename = list(request.files.keys())[0]
-        files = {secure_filename(filename): request.files[filename]}
+    r = DataFilesReceiver(request.stream)
+    if r.files:
+        filename = list(r.files.keys())[0]
+        files = {secure_filename(filename): r.files[filename]}
     else:
         files = dict()
-    data_to_insert = deserializer(files, request.form['json'])
+    data_to_insert = deserializer(files, r.form['json'])
     # this will insert. and if the same data exists then it will crash
     update_one(mongod_port, db, col, data_to_insert, data_to_insert, upsert=True)
     return make_response("ok")
@@ -319,7 +309,7 @@ def p2p_insert_one(db_path, db, col, document, nodes, serializer=serialize_doc_f
     logger = logging.getLogger(__name__)
 
     current_addr = current_address_func()
-    data = {k:v for k, v in document.items()}
+    data = {k: v for k, v in document.items()}
     try:
         update = data
         update["nodes"] = nodes
@@ -337,7 +327,8 @@ def p2p_insert_one(db_path, db, col, document, nodes, serializer=serialize_doc_f
             data["nodes"] += current_addr
             file, json = serializer(data)
             try:
-                requests.post("http://{}/insert_one/{}/{}".format(node, db, col), files=file, data={"json": json},
+                generator = DataFilesStreamer(file, data={"json": json})
+                requests.post("http://{}/insert_one/{}/{}".format(node, db, col), data=generator,
                               headers={'Authorization': password})
             except:
                 traceback.print_exc()

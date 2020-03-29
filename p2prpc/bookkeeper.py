@@ -13,7 +13,7 @@ p2pbookdb = "p2pbookdb"
 collection = "nodes"
 
 
-def node_states(mongod_port):
+def route_node_states(mongod_port):
     logger = logging.getLogger(__name__)
     try:
         client = MongoClient(port=mongod_port)
@@ -46,14 +46,14 @@ def get_state_in_lan(local_port, app_roles):
     return state
 
 
-def get_state_in_wan(local_port, app_roles):
+def get_state_in_wan(local_port, app_roles, password):
     state = []
     try:
         externalipres = requests.get('http://checkip.dyndns.org/')
         part = externalipres.content.decode('utf-8').split(": ")[1]
         ip_ = part.split("<")[0]
         try:
-            echo_response = requests.get('http://{}:{}/echo'.format(ip_, local_port), timeout=3)
+            echo_response = requests.get('http://{}:{}/echo'.format(ip_, local_port), timeout=3, headers={"Authorization":password})
             if echo_response.status_code == 200:
                 state.append({'address': ip_+":"+str(local_port),
                                           'workload': find_workload(),
@@ -123,27 +123,11 @@ def push_to_nodes(discovered_states):
             pass
 
 
-def update_function(local_port, app_roles, discovery_ips_file):
+def update_function(local_port, app_roles, discovery_ips_file, password):
     """
     Function for bookkeeper to make network discovery
     discovery_ips_file: can be None
     """
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
     #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
     logger = logging.getLogger(__name__)
 
@@ -161,7 +145,7 @@ def update_function(local_port, app_roles, discovery_ips_file):
 
     # get the current node state in LAN
     discovered_states.append(get_state_in_lan(local_port, app_roles))
-    discovered_states.extend(get_state_in_wan(local_port, app_roles))
+    discovered_states.extend(get_state_in_wan(local_port, app_roles, password))
     discovered_states.extend(get_states_from_file(discovery_ips_file))
 
     discovered_states = set_from_list(discovered_states)

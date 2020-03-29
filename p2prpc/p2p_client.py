@@ -1,4 +1,4 @@
-from .base import P2PFlaskApp, validate_arguments, create_bookkeeper_p2pblueprint
+from .base import P2PFlaskApp, validate_arguments, create_bookkeeper_p2pblueprint, is_debug_mode
 from functools import wraps
 from functools import partial
 from .p2pdata import p2p_push_update_one, p2p_insert_one
@@ -14,7 +14,7 @@ import threading
 import inspect
 import requests
 from .base import derive_vars_from_function
-from .registry_args import hash_kwargs
+from .registry_args import hash_kwargs, db_encoder
 from .p2p_brokerworker import check_remote_identifier
 from .p2pdata import find
 from .registry_args import kicomp
@@ -22,12 +22,18 @@ from werkzeug.serving import make_server
 from .base import configure_logger
 import os
 import traceback
+from collections import defaultdict, Callable
+from p2prpc.p2pdata import update_one
+import tempfile
+import pickle
+import dis
 
 
-def select_lru_worker(local_port):
+def select_lru_worker(local_port, func, password):
     """
     Selects the least recently used worker from the known states and returns its IP and PORT
     """
+    func_bytecode = db_encoder[Callable](func)
     logger = logging.getLogger(__name__)
     try:
         res = requests.get('http://localhost:{}/node_states'.format(local_port)).json()  # will get the data defined above
@@ -43,11 +49,15 @@ def select_lru_worker(local_port):
     res1 = sorted(res1, key=lambda x: x['workload'])
     while res1:
         try:
-            response = requests.get('http://{}/echo'.format(res1[0]['address']))
-            if response.status_code == 200:
-                break
-            else:
+            addr = res1[0]['address']
+            response = requests.get('http://{}/echo'.format(addr), headers={'Authorization': password})
+            if response.status_code != 200:
                 raise ValueError
+            worker_functions = requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': password}).json()
+
+            if func.__name__ not in worker_functions or worker_functions[func.__name__]["bytecode"] != func_bytecode:
+                raise ValueError(f"Function {func.__name__} in worker {addr} has different bytecode compared to local function")
+            break
         except:
             logger.info("worker unavailable {}".format(res1[0]['address']))
             res1.pop(0)
@@ -80,7 +90,7 @@ def get_available_brokers(local_port):
 
 
 def find_required_args():
-    necessary_args = ['db', 'col', 'filter', 'mongod_port', 'password']
+    necessary_args = ['db', 'col', 'filter', 'mongod_port', 'password', 'key_interpreter']
     actual_args = dict()
     frame_infos = inspect.stack()[:]
     for frame in frame_infos:
@@ -97,6 +107,46 @@ def p2p_progress_hook(curidx, endidx):
     update_ = {"progress": curidx/endidx * 100}
     filter_ = actual_args['filter']
     p2p_push_update_one(actual_args['mongod_port'], actual_args['db'], actual_args['col'], filter_, update_, password=actual_args['password'])
+
+
+def default_saving_func(filepath, item):
+    pickle.dump(item, open(filepath, 'wb'))
+
+
+def p2p_save(key, item, filesuffix=".pkl", saving_func=default_saving_func):
+    actual_args = find_required_args()
+    fp = p2p_getfilepath(suffix=filesuffix)
+    document = {key: fp}
+    saving_func(fp, item)
+    update_one(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], document, upsert=False)
+
+
+def default_loading_func(filepath):
+    pickle.load(open(filepath, 'rb'))
+
+
+def p2p_load(key, loading_func=default_loading_func):
+    actual_args = find_required_args()
+    item = find(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], actual_args['key_interpreter'])[0]
+    if key in item:
+        return loading_func(item[key])
+    else:
+        return None
+
+
+def p2p_getfilepath(suffix):
+    filepath = tempfile.mkstemp(suffix=suffix, dir=None, text=False)[1]
+    actual_args = find_required_args()
+    key = "tmpfile"
+    item = find(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], actual_args['key_interpreter'])[0]
+    count = 0
+    while key in item:
+        key += str(count)
+        count += 1
+    document = {key: filepath}
+    update_one(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], document,
+               upsert=False)
+    return filepath
 
 
 def p2p_dictionary_update(update_dictionary):
@@ -118,6 +168,7 @@ def get_remote_future(f, identifier, cache_path, mongod_port, db, col, key_inter
     expected_keys = inspect.signature(f).return_annotation
     expected_keys_list = list(expected_keys.keys())
     expected_keys_list.append("progress")
+    expected_keys_list.append("error")
     if any(item[k] is None for k in expected_keys):
         hint_file_keys = [k for k, v in expected_keys.items() if v == io.IOBase]
 
@@ -137,6 +188,7 @@ def get_local_future(f, identifier, cache_path, mongod_port, db, col, key_interp
     expected_keys = inspect.signature(f).return_annotation
     expected_keys_list = list(expected_keys.keys())
     expected_keys_list.append("progress")
+    expected_keys_list.append("error")
 
     item = find(mongod_port, db, col, {"identifier": identifier}, key_interpreter_dict)[0]
     item = {k: v for k, v in item.items() if k in expected_keys_list}
@@ -145,8 +197,9 @@ def get_local_future(f, identifier, cache_path, mongod_port, db, col, key_interp
 
 class Future:
 
-    def __init__(self, get_future_func):
+    def __init__(self, get_future_func, restart_func):
         self.get_future_func = get_future_func
+        self.restart_func = restart_func
 
     def get(self, timeout=3600*24):
         logger = logging.getLogger(__name__)
@@ -156,12 +209,17 @@ class Future:
         wait_time = 4
         while any(item[k] is None for k in item):
             item = self.get_future_func()
+            if 'error' in item and item['error'] != '':
+                raise Exception(str(item))
             time.sleep(wait_time)
             count_time += wait_time
             if count_time > timeout:
-                raise ValueError("Waiting time exceeded")
+                raise TimeoutError("Waiting time exceeded")
             logger.info("Not done yet " + str(item))
         return item
+
+    def restart(self):
+        self.restart_func()
 
 
 def get_expected_keys(f):
@@ -173,15 +231,8 @@ def get_expected_keys(f):
     expected_keys = inspect.signature(f).return_annotation
     expected_keys = {k: None for k in expected_keys}
     expected_keys['progress'] = 0
+    expected_keys['error'] = ""
     return expected_keys
-
-
-def create_future(f, identifier, cache_path, mongod_port, db, col, key_interpreter, password):
-    item = find(mongod_port, db, col, {"identifier": identifier}, key_interpreter)[0]
-    if item['nodes'] or 'remote_identifier' in item:
-        return Future(partial(get_remote_future, f, identifier, cache_path, mongod_port, db, col, key_interpreter, password))
-    else:
-        return Future(partial(get_local_future, f, identifier, cache_path, mongod_port, db, col, key_interpreter))
 
 
 def identifier_seen(mongod_port, identifier, db, col, expected_keys, key_interpreter, time_limit=24):
@@ -262,9 +313,9 @@ def create_remote_identifier(local_identifier, check_remote_identifier_args):
 
 class ServerThread(threading.Thread):
 
-    def __init__(self, app: P2PFlaskApp):
+    def __init__(self, app: P2PFlaskApp, processes=1):
         threading.Thread.__init__(self)
-        self.srv = make_server('0.0.0.0', app.local_port, app)
+        self.srv = make_server('0.0.0.0', app.local_port, app, processes=processes)
         self.app = app
         self.ctx = app.app_context()
         self.ctx.push()
@@ -300,8 +351,27 @@ class P2PClientApp(P2PFlaskApp):
         configure_logger("client", module_level_list=[(__name__, 'DEBUG')])
         super(P2PClientApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
                                                  cache_path=cache_path, password=password)
+        self.roles.append("client")
         self.worker_pool = multiprocessing.Pool(1)
         self.background_server = None
+        self.registry_functions = defaultdict(dict)
+
+    def create_future(self, f, identifier):
+        key_interpreter, db, col = derive_vars_from_function(f)
+        item = find(self.mongod_port, db, col, {"identifier": identifier}, key_interpreter)[0]
+        if item['nodes'] or 'remote_identifier' in item:
+            filter = {"identifier": identifier, "remote_identifier": item['remote_identifier']}
+            return Future(
+                partial(get_remote_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter, self.crypt_pass),
+                restart_func=partial(call_remote_func, item["ip"], item["port"], db, col, f.__name__, filter, self.crypt_pass))
+        else:
+            new_f = wraps(f)(partial(function_executor, f=f, filter={'identifier': item['identifier']},
+                                     mongod_port=self.mongod_port, db=db, col=col,
+                                     key_interpreter=key_interpreter,
+                                     logging_queue=self._logging_queue if not is_debug_mode() else None,
+                                     password=self.crypt_pass))
+            return Future(partial(get_local_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter),
+                          restart_func=partial(self.worker_pool.apply_async, new_f))
 
     def register_p2p_func(self, can_do_locally_func=lambda: False):
         """
@@ -317,7 +387,10 @@ class P2PClientApp(P2PFlaskApp):
         """
 
         def inner_decorator(f):
+            if f.__name__ in self.registry_functions:
+                raise ValueError(f"Function {f.__name__} already registered")
             key_interpreter, db, col = derive_vars_from_function(f)
+            self.registry_functions[f.__name__]['original_func'] = f
 
             @wraps(f)
             def wrap(*args, **kwargs):
@@ -327,14 +400,13 @@ class P2PClientApp(P2PFlaskApp):
                 expected_keys = get_expected_keys(f)
                 if identifier_seen(self.mongod_port, identifier, db, col, expected_keys, key_interpreter):
                     logger.info("Returning future that may already be precomputed")
-                    return create_future(f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter,
-                                         self.crypt_pass)
+                    return self.create_future(f, identifier)
 
                 validate_arguments(f, args, kwargs)
                 kwargs.update(expected_keys)
                 kwargs['identifier'] = identifier
 
-                lru_ip, lru_port = select_lru_worker(self.local_port)
+                lru_ip, lru_port = select_lru_worker(self.local_port, f, self.crypt_pass)
 
                 if can_do_locally_func() or lru_ip is None:
                     nodes = []
@@ -342,7 +414,10 @@ class P2PClientApp(P2PFlaskApp):
                     new_f = wraps(f)(partial(function_executor, f=f, filter={'identifier': kwargs['identifier']},
                                              mongod_port=self.mongod_port, db=db, col=col,
                                              key_interpreter=key_interpreter,
-                                             logging_queue=self._logging_queue))
+                                             # FIXME this if statement in case of debug mode was introduced just for an unfortunated combination of OS
+                                             #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
+                                             logging_queue=self._logging_queue if not is_debug_mode() else None,
+                                             password=self.crypt_pass))
                     res = self.worker_pool.apply_async(func=new_f)
                     logger.info("Executing function locally")
                 else:
@@ -366,18 +441,17 @@ class P2PClientApp(P2PFlaskApp):
                     filter = {"identifier": identifier, "remote_identifier": kwargs['remote_identifier']}
                     call_remote_func(lru_ip, lru_port, db, col, f.__name__, filter, self.crypt_pass)
                     logger.info("Dispacthed function work to {},{}".format(lru_ip, lru_port))
-                return create_future(f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter,
-                                     self.crypt_pass)
+                return self.create_future(f, identifier)
 
             return wrap
 
         return inner_decorator
 
-def create_p2p_client_app(discovery_ips_file, cache_path, local_port=5000, mongod_port=5100, password=""):
+def create_p2p_client_app(discovery_ips_file, cache_path, local_port=5000, mongod_port=5100, password="", processes=3):
     p2p_client_app = P2PClientApp(discovery_ips_file=discovery_ips_file, local_port=local_port, mongod_port=mongod_port,
                                   cache_path=cache_path, password=password)
-    p2p_client_app.background_server = ServerThread(p2p_client_app)
+    p2p_client_app.background_server = ServerThread(p2p_client_app, processes=processes)
     p2p_client_app.background_server.start()
-    wait_until_online(p2p_client_app.local_port)
+    wait_until_online(p2p_client_app.local_port, p2p_client_app.crypt_pass)
     wait_for_discovery(p2p_client_app.local_port)
     return p2p_client_app
