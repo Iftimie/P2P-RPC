@@ -479,7 +479,7 @@ def function_restart_unfinished_upload_on_broker(tmpdir, port_offset, func):
 
 
 def long_function_upload2(file_handle: io.IOBase) -> {"results": str}:
-    time.sleep(10)
+    time.sleep(30)
     return {"results": "ok"}
 
 
@@ -539,6 +539,62 @@ def function_restart_on_broker(tmpdir, port_offset, func):
     time.sleep(3)
 
 
+def function_restart_on_clientworker(tmpdir, port_offset, func):
+    file = __file__
+
+    client_port = 5000 + port_offset
+    broker_port = 5004 + port_offset
+
+    ndclient_path = os.path.join(tmpdir, "ndclient.txt")
+    cache_client_dir = os.path.join(tmpdir, "client")
+    cache_bw_dir = os.path.join(tmpdir, "bw")
+    with open(ndclient_path, "w") as f:
+        f.write("localhost:{}\n".format(broker_port))
+    client_app = create_p2p_client_app(ndclient_path, local_port=client_port, mongod_port=client_port + 100,
+                                       cache_path=cache_client_dir)
+    client_func = client_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+
+    broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port + 100,
+                                           cache_path=cache_bw_dir)
+    broker_worker_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+    broker_worker_thread = ServerThread(broker_worker_app, 10)
+    broker_worker_thread.start()
+    while select_lru_worker(client_port, func, client_app.crypt_pass) == (None, None):
+        time.sleep(3)
+        print("Waiting for client to know about broker")
+
+    ndcw_path = os.path.join(tmpdir, "ndcw.txt")
+    client_worker_port = 5005 + port_offset
+    cache_cw_dir = os.path.join(tmpdir, "cw")
+    with open(ndcw_path, "w") as f:
+        f.write("localhost:{}\n".format(broker_port))
+    clientworker_app = P2PClientworkerApp(ndcw_path, local_port=client_worker_port,
+                                          mongod_port=client_worker_port + 100, cache_path=cache_cw_dir)
+    clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(func)
+    clientworker_thread = ServerThread(clientworker_app)
+    clientworker_thread.start()
+    while select_lru_worker(client_worker_port, func, client_app.crypt_pass) == (None, None):
+        time.sleep(3)
+        print("Waiting for clientworker to know about broker")
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        pool_future = executor.submit(client_func, file_handle=open(file, 'rb'))
+        p2p_future = pool_future.result()
+        time.sleep(5)
+        p2p_future.restart()
+        result_ = p2p_future.get()
+        assert result_["results"] == "ok"
+        # assert len(list_results) == num_calls and all(isinstance(r, dict) for r in list_results)
+        # print(list_results)
+    client_app.background_server.shutdown()
+    print("Shutdown client")
+    broker_worker_thread.shutdown()
+    print("Shutdown brokerworker")
+    clientworker_thread.shutdown()
+    print("Shutdown clientworker")
+    time.sleep(3)
+
+
 if __name__ == "__main__":
     # multiple_client_calls(clean_and_create())
     # multiple_client_calls_client_worker(clean_and_create(), 0, func=large_file_function)
@@ -553,7 +609,8 @@ if __name__ == "__main__":
     # function_crash_on_clientworker_test(clean_and_create(), 1510, func=crashing_function,
     #                     file=__file__)
     # function_restart_unfinished_upload_on_broker(clean_and_create(), 1510, func=long_function_upload)
-    function_restart_on_broker(clean_and_create(), 150, func=long_function_upload2)
+    # function_restart_on_broker(clean_and_create(), 150, func=long_function_upload2)
+    function_restart_on_clientworker(clean_and_create(), 150, func=long_function_upload2)
     # TODO I still need to test what happens to a request when it remains unsolved due to outside factors (power drop)
     #  and not internal function errors that can be catched
 

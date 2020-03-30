@@ -56,6 +56,7 @@ def find_response_with_work(local_port, db, collection, func_name, password):
     return res_json, res_broker_ip, res_broker_port
 
 
+from p2prpc.p2pdata import p2p_push_update_one
 def check_brokerworker_termination(jobs, mongod_port, password):
     logger = logging.getLogger(__name__)
 
@@ -64,14 +65,19 @@ def check_brokerworker_termination(jobs, mongod_port, password):
         if not process.is_alive():
             continue
         filter = {k: v for k, v in filteritems}
-        item = find(mongod_port, db, col, filter)
-        url = 'http://{}/check_function_termination/{}/{}/{}'.format(item['address'], db, col, func_name)
+        item = find(mongod_port, db, col, filter)[0]
+        print(item)
+        url = 'http://{}/check_function_termination/{}/{}/{}'.format(item['nodes'][0], db, col, func_name)
         data = {"filter_json": dumps(filter)}
         try:
             res = requests.post(url, files={}, data=data, headers={"Authorization": password}).json()
             if res['status'] is True:
                 logger.info("Terminated function {} {}".format(func_name, filter))
                 process.terminate()
+                print("AsdasdasdasDasdkdfajksdgfahzsdifaisdhfhuisdfhuiashdfil")
+                print(filter)
+                search_filter = {"$or": [{"identifier": item['identifier']}, {"identifier": item['remote_identifier']}]}
+                p2p_push_update_one(mongod_port, db, col, search_filter, {"started": 'None', 'kill_clientworker': False}, password=password)
         except:
             logger.info("check_brokerworker_termination error")
 
@@ -141,8 +147,14 @@ class P2PClientworkerApp(P2PFlaskApp):
                 local_data.update({k: None for k in key_return})
 
                 deserializer = partial(deserialize_doc_from_net, up_dir=updir, key_interpreter=key_interpreter)
-                p2p_insert_one(self.mongod_port, db, col, local_data, [broker_ip + ":" + str(broker_port)],
-                               do_upload=False, password=self.crypt_pass)
+
+                current_list_with_identifier = find(self.mongod_port, db, col, filter_, key_interpreter)
+                if len(current_list_with_identifier)==0:
+                    # TODO only insert if identifier was not allready downloaded
+                    #  otherwise in case of restart, the clientworker will redownload the data and it will crash in
+                    #  p2p_pull_update_one when checking   if len(collection_res) != 1:
+                    p2p_insert_one(self.mongod_port, db, col, local_data, [broker_ip + ":" + str(broker_port)],
+                                   do_upload=False, password=self.crypt_pass)
                 p2p_pull_update_one(self.mongod_port, db, col, filter_, param_keys, deserializer,
                                     hint_file_keys=hint_args_file_keys, password=self.crypt_pass)
 

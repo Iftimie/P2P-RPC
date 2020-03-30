@@ -20,6 +20,7 @@ from .registry_args import remove_values_from_doc, db_encoder
 from multiprocessing import Process
 import traceback
 from collections import Callable
+import psutil
 
 
 def call_remote_func(ip, port, db, col, func_name, filter, password):
@@ -93,26 +94,19 @@ def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_
         raise e
     return update_
 
-import psutil
+
 def route_terminate_function(mongod_port, db, col, self):
     logger = logging.getLogger(__name__)
 
     filter = loads(request.form['filter_json'])
     jobkey = frozenset(filter.items())
-    print(jobkey)
-    #TODO OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO
-    # https://docs.python.org/2/library/multiprocessing.html use the server process manager.dict
-    print("PERSISTENT route_terminate_function", jobkey in self.jobs)
     if jobkey in self.jobs:
         pid = self.jobs[jobkey]
         if psutil.pid_exists(pid):
-            print("gets here")
             p = psutil.Process(pid)
-            print("then here")
             try:
                 p.terminate()
             except Exception as e:
-                print("asdasdasd")
                 traceback.print_exc()
                 pass
             logger.info("Terminated job {}".format(filter))
@@ -189,12 +183,17 @@ def route_search_work(mongod_port, db, collection, func_name, time_limit):
 
     col = list(MongoClient(port=mongod_port)[db][collection].find({}))
 
+    print("SADFSDFASDASDFSDFASDFSDFASDFSDF", col)
+
     col = list(filter(lambda item: "finished" not in item, col))
     col1 = filter(lambda item: "started" not in item, col)
     col2 = filter(lambda item: "started" in item and item['started'] != func_name, col)
     col3 = filter(lambda item: "started" in item and item['started'] == func_name and (time.time() - item['timestamp']) > time_limit * 3600, col)
 
     col = list(col1) + list(col2) + list(col3)
+
+    print("SADFSDFASDASDFSDFASDFSDFASDFSDF", col)
+
     # list(col) + list(col2)
     # TODO fix this. it returns items that have finished
     if col:
@@ -203,7 +202,7 @@ def route_search_work(mongod_port, db, collection, func_name, time_limit):
         item = col[0]
         filter_ = {"identifier": item["identifier"], "remote_identifier": item['remote_identifier']}
         logger.info("Node{}(possible client worker) will ask for filter: {}".format(request.remote_addr, str(filter_)))
-        MongoClient(port=mongod_port)[db][collection].update_one(filter_, {"$set": {"started": func_name}})
+        MongoClient(port=mongod_port)[db][collection].update_one(filter_, {"$set": {"started": func_name}},)
         return jsonify({"filter": filter_})
     else:
         return jsonify({})
