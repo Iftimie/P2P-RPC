@@ -5,7 +5,7 @@ from .p2pdata import p2p_push_update_one, p2p_insert_one
 from .p2pdata import p2p_pull_update_one, deserialize_doc_from_net
 import logging
 from .base import self_is_reachable
-from .p2p_brokerworker import call_remote_func, function_executor, terminate_remote_func
+from .p2p_brokerworker import call_remote_func, function_executor, terminate_remote_func, delete_remote_func
 import multiprocessing
 import io
 from .base import wait_until_online
@@ -26,6 +26,8 @@ from collections import defaultdict, Callable
 from p2prpc.p2pdata import update_one
 import tempfile
 import pickle
+from pymongo import MongoClient
+from p2prpc.registry_args import deserialize_doc_from_db, remove_values_from_doc
 import dis
 
 
@@ -204,10 +206,11 @@ def get_local_future(f, identifier, cache_path, mongod_port, db, col, key_interp
 
 class Future:
 
-    def __init__(self, get_future_func, restart_func, terminate_func):
+    def __init__(self, get_future_func, restart_func, terminate_func, delete_func):
         self.__get_future_func = get_future_func
         self.__restart_func = restart_func
         self.__terminate_func = terminate_func
+        self.__delete_func = delete_func
 
     def get(self, timeout=3600*24):
         logger = logging.getLogger(__name__)
@@ -375,6 +378,15 @@ class P2PClientApp(P2PFlaskApp):
         if identifier in self.jobs and self.jobs[identifier].is_alive():
             self.jobs[identifier].terminate()
 
+    def delete_local(self, identifier, original_func):
+        self.terminate_local(identifier)
+        key_interpreter, db_name, col = derive_vars_from_function(original_func)
+        mongodb = MongoClient(port=self.__mongod_port)['p2p']
+        item = find(self.mongod_port, db_name, col, identifier)[0]
+        document = deserialize_doc_from_db(item, key_interpreter)
+        remove_values_from_doc(document)
+        mongodb[db_name].remove(item)
+
     def start_remote(self, lru_ip, lru_port, db, col, fname, filter_, ki):
         kwargs = find(self.mongod_port, db, col, filter_, ki)[0]
         kwargs_ = {k: v for k,v in kwargs.items() if k in ki}
@@ -397,6 +409,13 @@ class P2PClientApp(P2PFlaskApp):
                 self.jobs[frozenset_filter].terminate()
             terminate_remote_func(ip, port, db, col, funcname, filter_, self.crypt_pass)
 
+    def delete_remote(self, filter_, db, col, ki, funcname):
+        self.terminate_remote(filter_, db, col, ki, funcname)
+        item = find(self.mongod_port, db, col, filter_, ki)[0]
+        ip, port = item['nodes'][0].split(":")
+        delete_remote_func(ip, port, db, col, funcname, filter_, self.crypt_pass)
+
+
     def create_future(self, f, identifier):
         key_interpreter, db, col = derive_vars_from_function(f)
         item = find(self.mongod_port, db, col, {"identifier": identifier}, key_interpreter)[0]
@@ -406,7 +425,8 @@ class P2PClientApp(P2PFlaskApp):
             return Future(
                 partial(get_remote_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter, self.crypt_pass, self.jobs),
                 restart_func=partial(call_remote_func, ip, port, db, col, f.__name__, filter, self.crypt_pass),
-                terminate_func=partial(self.terminate_remote, filter, db, col, key_interpreter, f.__name__))
+                terminate_func=partial(self.terminate_remote, filter, db, col, key_interpreter, f.__name__),
+                delete_func=partial(self.delete_remote, filter, db, col, key_interpreter, f.__name__))
         else:
             new_f = wraps(f)(partial(function_executor, f=f, filter={'identifier': item['identifier']},
                                      mongod_port=self.mongod_port, db=db, col=col,
@@ -415,7 +435,8 @@ class P2PClientApp(P2PFlaskApp):
                                      password=self.crypt_pass))
             return Future(partial(get_local_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter),
                           restart_func=partial(self.start_local, new_f, identifier),
-                          terminate_func=partial(self.terminate_local, identifier))
+                          terminate_func=partial(self.terminate_local, identifier),
+                          delete_func=partial(self.delete_local, identifier))
 
     def register_p2p_func(self, can_do_locally_func=lambda: False):
         """

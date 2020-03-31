@@ -66,7 +66,6 @@ def do_nothing_function_again(random_arg: int) -> {"results": str}:
     return {"results": "bye"}
 
 
-
 def create_apps(tmpdir, port_offset, func, func2=None):
     client_port = 5000 + port_offset
     broker_port = 5004 + port_offset

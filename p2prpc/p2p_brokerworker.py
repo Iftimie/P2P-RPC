@@ -46,6 +46,15 @@ def terminate_remote_func(ip, port, db, col, func_name, filter, password):
     return res
 
 
+def delete_remote_func(ip, port, db, col, func_name, filter, password):
+    data = {"filter_json": dumps(filter)}
+
+    url = "http://{ip}:{port}/delete_function/{db}/{col}/{fname}".format(ip=ip, port=port, db=db, col=col,
+                                                                            fname=func_name)
+    res = requests.post(url, files={}, data=data, headers={"Authorization": password})
+    return res
+
+
 def check_remote_identifier(ip, port, db, col, func_name, identifier, password):
     url = "http://{ip}:{port}/identifier_available/{db}/{col}/{fname}/{identifier}".format(ip=ip, port=port, db=db,
                                                                                      col=col, fname=func_name,
@@ -114,6 +123,33 @@ def route_terminate_function(mongod_port, db, col, self):
     else: # must be a clientworker that is doing the job
         MongoClient(port=mongod_port)[db][col].update_one(filter, {"$set": {"kill_clientworker": True}})
         logger.info("job is on clientworker {} added notification".format(filter))
+    return make_response("ok", 200)
+
+
+def route_delete_function(mongod_port, db, col, self):
+    logger = logging.getLogger(__name__)
+
+    filter = loads(request.form['filter_json'])
+    jobkey = frozenset(filter.items())
+    if jobkey in self.jobs:
+        pid = self.jobs[jobkey]
+        if psutil.pid_exists(pid):
+            return make_response("function still alive. call terminate first", 405)
+
+    original_func = self.registry_functions[col]
+    key_interpreter, db_name, col = derive_vars_from_function(original_func)
+    mongodb = MongoClient(port=self.__mongod_port)['p2p']
+    item = find(self.mongod_port, db_name, col, filter)[0]
+    document = deserialize_doc_from_db(item, key_interpreter)
+    remove_values_from_doc(document)
+    mongodb[db_name].remove(item)
+
+    # IF job is on client worker, then a remainder of the job must still exist here
+    # TODO small remainings should still exist
+
+    # there should be some mechanism so that a document is deleted only after the clienworker deleted it
+    MongoClient(port=mongod_port)[db][col].update_one(filter, {"$set": {"delete_clientworker": True}}, upsert=True)
+    logger.info("job is on clientworker {} added notification for deletion".format(filter))
     return make_response("ok", 200)
 
 
@@ -251,12 +287,6 @@ def delete_old_requests(mongod_port, registry_functions, time_limit=24, include_
             if (time.time() - item['timestamp']) > time_limit * 3600:
                 document = deserialize_doc_from_db(item, key_interpreter_dict)
                 remove_values_from_doc(document)
-
-                #TODO refactor this somehow
-                for k in item:
-                    if "tmpfile" in k:
-                        os.remove(item[k])
-
                 db[col_name].remove(item)
 
 

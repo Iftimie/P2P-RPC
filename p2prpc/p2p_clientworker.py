@@ -60,13 +60,14 @@ from p2prpc.p2pdata import p2p_push_update_one
 def check_brokerworker_termination(jobs, mongod_port, password):
     logger = logging.getLogger(__name__)
 
+    # TODO instead of keeping this stupid jobs dictionary, I could just store the PID in mongodb
+
     for filteritems in jobs:
         process, db, col, func_name = jobs[filteritems]
         if not process.is_alive():
             continue
         filter = {k: v for k, v in filteritems}
         item = find(mongod_port, db, col, filter)[0]
-        print(item)
         url = 'http://{}/check_function_termination/{}/{}/{}'.format(item['nodes'][0], db, col, func_name)
         data = {"filter_json": dumps(filter)}
         try:
@@ -74,8 +75,39 @@ def check_brokerworker_termination(jobs, mongod_port, password):
             if res['status'] is True:
                 logger.info("Terminated function {} {}".format(func_name, filter))
                 process.terminate()
-                print("AsdasdasdasDasdkdfajksdgfahzsdifaisdhfhuisdfhuiashdfil")
-                print(filter)
+                search_filter = {"$or": [{"identifier": item['identifier']}, {"identifier": item['remote_identifier']}]}
+                p2p_push_update_one(mongod_port, db, col, search_filter, {"started": 'None', 'kill_clientworker': False}, password=password)
+        except:
+            logger.info("check_brokerworker_termination error")
+
+
+def check_brokerworker_deletion(self):
+    logger = logging.getLogger(__name__)
+
+    for funcname in self.registry_functions:
+        f = self.registry_functions[funcname]['original_func']
+        key_interpreter, db, col = derive_vars_from_function(f)
+        items = find(self.mongod_port, db, col, {})
+        for item in items:
+            search_filter = {"$or": [{"identifier": item['identifier']}, {"identifier": item['remote_identifier']}]}
+            url = 'http://{}/check_function_deletion/{}/{}/{}'.format(item['nodes'][0], db, col, funcname)
+            data = {"filter_json": dumps(search_filter)}
+            res = requests.post(url, files={}, data=data, headers={"Authorization": self.crypt_pass}).json()
+            if res['status'] is True:
+
+
+    for filteritems in jobs:
+        process, db, col, func_name = jobs[filteritems]
+        if not process.is_alive():
+            continue
+        filter = {k: v for k, v in filteritems}
+        url = 'http://{}/check_function_deletion/{}/{}/{}'.format(item['nodes'][0], db, col, func_name)
+        data = {"filter_json": dumps(filter)}
+        try:
+            res = requests.post(url, files={}, data=data, headers={"Authorization": password}).json()
+            if res['status'] is True:
+                logger.info("Terminated function {} {}".format(func_name, filter))
+                process.terminate()
                 search_filter = {"$or": [{"identifier": item['identifier']}, {"identifier": item['remote_identifier']}]}
                 p2p_push_update_one(mongod_port, db, col, search_filter, {"started": 'None', 'kill_clientworker': False}, password=password)
         except:
