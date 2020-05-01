@@ -181,7 +181,8 @@ def get_remote_future(f, identifier, cache_path, mongod_port, db, col, key_inter
             time.sleep(4)
             logger.info("Waiting for uploading job to finish")
 
-        search_filter = {"$or": [{"identifier": identifier}, {"identifier": item['remote_identifier']}]}
+        search_filter = {"$or": [{"identifier": identifier}, {"identifier": item['remote_identifier']}]} # TODO I think it has to be
+        #  {"$or": [{"identifier": identifier}, {"remote_identifier": item['remote_identifier']}]}
         p2p_pull_update_one(mongod_port, db, col, search_filter, expected_keys_list,
                             deserializer=partial(deserialize_doc_from_net,
                                                  up_dir=up_dir, key_interpreter=key_interpreter_dict),

@@ -342,6 +342,16 @@ class P2PBrokerworkerApp(P2PFlaskApp):
             updir = os.path.join(self.cache_path, db, col)  # upload directory
             os.makedirs(updir, exist_ok=True)
 
+            # TODO oooooooooooooooooooooooooooooooooooooooooo
+            #  in order to refactor the framework properly, I should shart by looking into the methods defined here
+
+            # the biggest problem here is that I optimized prematurely. biggeest mistake possible and I don't have the energy to refactor it
+            # the switches between running locally and distributing (client and brokerworker) simply complicated the program
+            # maybe I could start remaking everything and keeping only
+            #    client that only dispacthes
+            #    broker that only redirects
+            #    clientworker (should stay the same)
+
             # these functions below make more sense in p2p_data.py
             p2p_route_insert_one_func = wraps(p2p_route_insert_one)(
                 partial(self.pass_req_dec(p2p_route_insert_one),
