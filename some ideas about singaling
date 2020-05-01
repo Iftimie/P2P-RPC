@@ -1,0 +1,23 @@
+which are the statuses
+
+client:
+	running locally: - storing arguments (file is not moved, args are put in mongo)
+					 - signal is sent for execute
+					 - signal is sent for kill (we may want to restart)
+					 - signal is sent for delete (it will first send kill)
+					 - signal is sent for execute (restart)
+
+	running distributed: - storing arguments (file is uploaded, args are uploaded)
+						 - signal is sent for execution
+						 - signal is sent for kill
+						 - signal is sent for delete (it will first send kill)
+						 - signal is sent for execute (restart)
+
+brokerworker:
+	- receiving arguments (file is saved, args are put in mongo)
+	- signal is received for execute (how should be handled this signal?)
+	- signal is received for kill
+	- signal is received for delete
+	- signal is received for execute restart
+
+
