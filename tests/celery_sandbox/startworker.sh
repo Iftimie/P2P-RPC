@@ -27,5 +27,5 @@
 # since this is a sandbox and both scrips (startworker.sh and startmongoandclient.sh) are in the same folder I will open
 # them as such
 
-celery -A func worker -l info
+celery -A func worker -l DEBUG --statedb=worker.state --pool=prefork --concurrency=3
 # CTRL Z to kill
