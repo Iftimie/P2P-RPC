@@ -80,7 +80,7 @@ def check_brokerworker_termination(jobs, mongod_port, password):
         except:
             logger.info("check_brokerworker_termination error")
 
-
+# aparently this function is not used
 def check_brokerworker_deletion(self):
     logger = logging.getLogger(__name__)
 
@@ -94,7 +94,8 @@ def check_brokerworker_deletion(self):
             data = {"filter_json": dumps(search_filter)}
             res = requests.post(url, files={}, data=data, headers={"Authorization": self.crypt_pass}).json()
             if res['status'] is True:
-
+                pass
+    return
 
     for filteritems in jobs:
         process, db, col, func_name = jobs[filteritems]

@@ -219,7 +219,7 @@ def route_search_work(mongod_port, db, collection, func_name, time_limit):
 
     col = list(MongoClient(port=mongod_port)[db][collection].find({}))
 
-    print("SADFSDFASDASDFSDFASDFSDFASDFSDF", col)
+    # print("SADFSDFASDASDFSDFASDFSDFASDFSDF", col)
 
     col = list(filter(lambda item: "finished" not in item, col))
     col1 = filter(lambda item: "started" not in item, col)
@@ -228,7 +228,7 @@ def route_search_work(mongod_port, db, collection, func_name, time_limit):
 
     col = list(col1) + list(col2) + list(col3)
 
-    print("SADFSDFASDASDFSDFASDFSDFASDFSDF", col)
+    # print("SADFSDFASDASDFSDFASDFSDFASDFSDF", col)
 
     # list(col) + list(col2)
     # TODO fix this. it returns items that have finished

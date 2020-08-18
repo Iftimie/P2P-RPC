@@ -9,3 +9,4 @@ examples/brokerworkerdb
 examples/clientdb
 examples/clientworkerdb
 p2prpc.egg-info/
+tests/celery_sandbox/mongodbpath/
