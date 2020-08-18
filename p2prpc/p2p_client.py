@@ -194,17 +194,6 @@ def get_remote_future(f, identifier, cache_path, mongod_port, db, col, key_inter
     return item
 
 
-def get_local_future(f, identifier, cache_path, mongod_port, db, col, key_interpreter_dict):
-    expected_keys = inspect.signature(f).return_annotation
-    expected_keys_list = list(expected_keys.keys())
-    expected_keys_list.append("progress")
-    expected_keys_list.append("error")
-
-    item = find(mongod_port, db, col, {"identifier": identifier}, key_interpreter_dict)[0]
-    item = {k: v for k, v in item.items() if k in expected_keys_list}
-    return item
-
-
 class Future:
 
     def __init__(self, get_future_func, restart_func, terminate_func, delete_func):
@@ -369,25 +358,6 @@ class P2PClientApp(P2PFlaskApp):
         self.background_server = None
         self.registry_functions = defaultdict(dict)
 
-    def start_local(self, newf, identifier):
-        p = multiprocessing.Process(target=newf)
-        p.daemon = True
-        p.start()
-        self.jobs[identifier] = p
-
-    def terminate_local(self, identifier):
-        if identifier in self.jobs and self.jobs[identifier].is_alive():
-            self.jobs[identifier].terminate()
-
-    def delete_local(self, identifier, original_func):
-        self.terminate_local(identifier)
-        key_interpreter, db_name, col = derive_vars_from_function(original_func)
-        mongodb = MongoClient(port=self.__mongod_port)['p2p']
-        item = find(self.mongod_port, db_name, col, identifier)[0]
-        document = deserialize_doc_from_db(item, key_interpreter)
-        remove_values_from_doc(document)
-        mongodb[db_name].remove(item)
-
     def start_remote(self, lru_ip, lru_port, db, col, fname, filter_, ki):
         kwargs = find(self.mongod_port, db, col, filter_, ki)[0]
         kwargs_ = {k: v for k,v in kwargs.items() if k in ki}
@@ -416,28 +386,18 @@ class P2PClientApp(P2PFlaskApp):
         ip, port = item['nodes'][0].split(":")
         delete_remote_func(ip, port, db, col, funcname, filter_, self.crypt_pass)
 
-
     def create_future(self, f, identifier):
         key_interpreter, db, col = derive_vars_from_function(f)
         item = find(self.mongod_port, db, col, {"identifier": identifier}, key_interpreter)[0]
-        if item['nodes'] or 'remote_identifier' in item:
-            filter = {"identifier": identifier, "remote_identifier": item['remote_identifier']}
-            ip, port = item['nodes'][0].split(":")
-            return Future(
-                partial(get_remote_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter, self.crypt_pass, self.jobs),
-                restart_func=partial(call_remote_func, ip, port, db, col, f.__name__, filter, self.crypt_pass),
-                terminate_func=partial(self.terminate_remote, filter, db, col, key_interpreter, f.__name__),
-                delete_func=partial(self.delete_remote, filter, db, col, key_interpreter, f.__name__))
-        else:
-            new_f = wraps(f)(partial(function_executor, f=f, filter={'identifier': item['identifier']},
-                                     mongod_port=self.mongod_port, db=db, col=col,
-                                     key_interpreter=key_interpreter,
-                                     logging_queue=self._logging_queue if not is_debug_mode() else None,
-                                     password=self.crypt_pass))
-            return Future(partial(get_local_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter),
-                          restart_func=partial(self.start_local, new_f, identifier),
-                          terminate_func=partial(self.terminate_local, identifier),
-                          delete_func=partial(self.delete_local, identifier))
+
+        filter = {"identifier": identifier, "remote_identifier": item['remote_identifier']}
+        ip, port = item['nodes'][0].split(":")
+        return Future(
+            partial(get_remote_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter, self.crypt_pass, self.jobs),
+            restart_func=partial(call_remote_func, ip, port, db, col, f.__name__, filter, self.crypt_pass),
+            terminate_func=partial(self.terminate_remote, filter, db, col, key_interpreter, f.__name__),
+            delete_func=partial(self.delete_remote, filter, db, col, key_interpreter, f.__name__))
+
 
     def register_p2p_func(self, can_do_locally_func=lambda: False):
         """
@@ -474,35 +434,19 @@ class P2PClientApp(P2PFlaskApp):
 
                 lru_ip, lru_port = select_lru_worker(self.local_port, f, self.crypt_pass)
 
-                if can_do_locally_func() or lru_ip is None:
-                    nodes = []
-                    p2p_insert_one(self.mongod_port, db, col, kwargs, nodes, self.crypt_pass)
-                    new_f = wraps(f)(partial(function_executor, f=f, filter={'identifier': kwargs['identifier']},
-                                             mongod_port=self.mongod_port, db=db, col=col,
-                                             key_interpreter=key_interpreter,
-                                             # FIXME this if statement in case of debug mode was introduced just for an unfortunated combination of OS
-                                             #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
-                                             logging_queue=self._logging_queue if not is_debug_mode() else None,
-                                             password=self.crypt_pass))
-                    self.start_local(new_f, kwargs['identifier'])
-                    logger.info("Executing function locally")
-                else:
-                    # TODO put all of this in a job
-                    nodes = [str(lru_ip) + ":" + str(lru_port)]
-                    kwargs['remote_identifier'] = create_remote_identifier(kwargs['identifier'],
-                                                                           {"ip": lru_ip, "port": lru_port, "db": db,
-                                                                            "col": col, "func_name": f.__name__,
-                                                                            "password": self.crypt_pass})
-                    p2p_insert_one(self.mongod_port, db, col, kwargs, nodes,
-                                   current_address_func=partial(self_is_reachable, self.local_port),
-                                   password=self.crypt_pass, do_upload=False)
+                # TODO put all of this in a job
+                nodes = [str(lru_ip) + ":" + str(lru_port)]
+                kwargs['remote_identifier'] = create_remote_identifier(kwargs['identifier'],
+                                                                       {"ip": lru_ip, "port": lru_port, "db": db,
+                                                                        "col": col, "func_name": f.__name__,
+                                                                        "password": self.crypt_pass})
+                p2p_insert_one(self.mongod_port, db, col, kwargs, nodes,
+                               current_address_func=partial(self_is_reachable, self.local_port),
+                               password=self.crypt_pass, do_upload=False)
 
-                    filter = {"identifier": identifier, "remote_identifier": kwargs['remote_identifier']}
-                    logger.info("Dispacthed function work to {},{}".format(lru_ip, lru_port))
-                    p = multiprocessing.Process(target=partial(self.start_remote, lru_ip, lru_port, db, col, f.__name__, filter, key_interpreter))
-                    p.daemon = True
-                    p.start()
-                    self.jobs[frozenset(filter.items())] = p
+                filter = {"identifier": identifier, "remote_identifier": kwargs['remote_identifier']}
+                logger.info("Dispacthed function work to {},{}".format(lru_ip, lru_port))
+                self.start_remote(lru_ip, lru_port, db, col, f.__name__, filter, key_interpreter)
                 return self.create_future(f, identifier)
 
             return wrap

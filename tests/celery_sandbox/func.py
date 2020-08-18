@@ -6,6 +6,13 @@ mongodport = 27022
 # app = Celery('project_Alex', broker=f'mongodb://localhost:{mongodport}/database_name', backend=f'mongodb://localhost:{mongodport}')
 redisport = 6379
 app = Celery('project_Alex', broker=f'redis://localhost:{redisport}/0', backend=f'redis://localhost:{redisport}')
+# This is annoying. every time I want to do something that I need, the package does not support
+# I need to programatically update the list of workers.
+# that means I need a script that will run the command celery -A func worker --pool=prefork blabla
+# and the same script should run the bookkeeping. And when new queues appear, the script should kill the current worker
+# and update the list
+# then start again the worker
+
 # it should connect to the broker
 
 # app.config_from_object('celeryconfig')
@@ -20,3 +27,6 @@ def hello(): # the filter should be the argument
         print("Still not killed")
     return 'hello world'
 
+
+pass
+print("asdasd")
