@@ -57,29 +57,31 @@ def find_response_with_work(local_port, db, collection, func_name, password):
 
 
 from p2prpc.p2pdata import p2p_push_update_one
+from json import dumps, loads
 def check_brokerworker_termination(jobs, mongod_port, password):
     logger = logging.getLogger(__name__)
 
     # TODO instead of keeping this stupid jobs dictionary, I could just store the PID in mongodb
 
-    for filteritems in jobs:
+    for filteritems in list(jobs.keys()):
         process, db, col, func_name = jobs[filteritems]
         if not process.is_alive():
+            del jobs[filteritems]
             continue
         filter = {k: v for k, v in filteritems}
+        p2p_pull_update_one(mongod_port, db, col, filter, ['kill_clientworker'], deserializer=partial(deserialize_doc_from_net, up_dir=None), password=password)
         item = find(mongod_port, db, col, filter)[0]
-        url = 'http://{}/check_function_termination/{}/{}/{}'.format(item['nodes'][0], db, col, func_name)
-        data = {"filter_json": dumps(filter)}
-        try:
-            res = requests.post(url, files={}, data=data, headers={"Authorization": password}).json()
-            if res['status'] is True:
-                logger.info("Terminated function {} {}".format(func_name, filter))
-                process.terminate()
-                search_filter = {"$or": [{"identifier": item['identifier']}, {"identifier": item['remote_identifier']}]}
-                p2p_push_update_one(mongod_port, db, col, search_filter, {"started": 'None', 'kill_clientworker': False}, password=password)
-        except:
-            logger.info("check_brokerworker_termination error")
+        if item['kill_clientworker'] is True:
+            logger.info("Terminated function {} {}".format(func_name, filter))
+            process.terminate()
+            del jobs[filteritems]
+            search_filter = {"$or": [{"identifier": item['identifier']}, {"identifier": item['remote_identifier']}]}
+            p2p_push_update_one(mongod_port, db, col, search_filter, {"started": 'terminated', 'kill_clientworker': False}, password=password)
+            print("pushed termination")
 
+from pymongo import MongoClient
+from .p2pdata import deserialize_doc_from_db
+from .registry_args import remove_values_from_doc, db_encoder
 # aparently this function is not used
 def check_brokerworker_deletion(self):
     logger = logging.getLogger(__name__)
@@ -89,30 +91,25 @@ def check_brokerworker_deletion(self):
         key_interpreter, db, col = derive_vars_from_function(f)
         items = find(self.mongod_port, db, col, {})
         for item in items:
+            print("asdasdasdasd")
             search_filter = {"$or": [{"identifier": item['identifier']}, {"identifier": item['remote_identifier']}]}
-            url = 'http://{}/check_function_deletion/{}/{}/{}'.format(item['nodes'][0], db, col, funcname)
-            data = {"filter_json": dumps(search_filter)}
-            res = requests.post(url, files={}, data=data, headers={"Authorization": self.crypt_pass}).json()
-            if res['status'] is True:
-                pass
+            p2p_pull_update_one(self.mongod_port, db, col, search_filter, ['delete_clientworker'],
+                                deserializer=partial(deserialize_doc_from_net, up_dir=None), password=self.crypt_pass)
+            itemtodel = find(self.mongod_port, db, col, search_filter)[0]
+            print("itemtodel", itemtodel)
+            if itemtodel['delete_clientworker'] is True:
+                mongodb = MongoClient(port=self.mongod_port)[db][col]
+                p2p_push_update_one(self.mongod_port, db, col, search_filter, {'delete_clientworker': False}, password=self.crypt_pass)
+                document = deserialize_doc_from_db(itemtodel, key_interpreter)
+                remove_values_from_doc(document)
+                # mongodb.delete_one(search_filter) # IF I PUT ITEMTODEL IT WON'T WORK. WTFF??
+                itemtodel = find(self.mongod_port, db, col, search_filter)[0]
+                mongodb.delete_one(itemtodel)
+                ### OOOH PROBABLY BECAUSE IT IS AN OLD OBJECT, OUTDATED. BECASE i DID P2P PUSH UPDATE
+                # yep. DONT INVALIDATE OBJECTS BY CALLING FUNCTIONS THAT UPDATE THE DB AND THE OBJECT REMAINS OUTDATED
+                print("itemul vietii", itemtodel)
+                print("dupa stergere", find(self.mongod_port, db, col, search_filter))
     return
-
-    for filteritems in jobs:
-        process, db, col, func_name = jobs[filteritems]
-        if not process.is_alive():
-            continue
-        filter = {k: v for k, v in filteritems}
-        url = 'http://{}/check_function_deletion/{}/{}/{}'.format(item['nodes'][0], db, col, func_name)
-        data = {"filter_json": dumps(filter)}
-        try:
-            res = requests.post(url, files={}, data=data, headers={"Authorization": password}).json()
-            if res['status'] is True:
-                logger.info("Terminated function {} {}".format(func_name, filter))
-                process.terminate()
-                search_filter = {"$or": [{"identifier": item['identifier']}, {"identifier": item['remote_identifier']}]}
-                p2p_push_update_one(mongod_port, db, col, search_filter, {"started": 'None', 'kill_clientworker': False}, password=password)
-        except:
-            logger.info("check_brokerworker_termination error")
 
 
 class P2PClientworkerApp(P2PFlaskApp):
@@ -130,6 +127,8 @@ class P2PClientworkerApp(P2PFlaskApp):
                                                          registry_functions=self.registry_functions))
         self.register_time_regular_func(partial(check_brokerworker_termination,
                                                          self.jobs, self.mongod_port, self.crypt_pass))
+        self.register_time_regular_func(partial(check_brokerworker_deletion,
+                                                         self))
 
     def start_local(self, newf, filter_, db, col, funcname):
         process = multiprocessing.Process(target=newf)
@@ -178,6 +177,7 @@ class P2PClientworkerApp(P2PFlaskApp):
                 local_data = {k: v for k, v in filter_.items()}
                 local_data.update({k: None for k in param_keys})
                 local_data.update({k: None for k in key_return})
+                local_data.update({"started":None, "kill_clientworker": None, "delete_clientworker": None})
 
                 deserializer = partial(deserialize_doc_from_net, up_dir=updir, key_interpreter=key_interpreter)
 

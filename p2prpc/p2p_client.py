@@ -15,7 +15,7 @@ import inspect
 import requests
 from .base import derive_vars_from_function
 from .registry_args import hash_kwargs, db_encoder
-from .p2p_brokerworker import check_remote_identifier
+from .p2p_brokerworker import check_remote_identifier, check_function_termination, check_function_deletion
 from .p2pdata import find
 from .registry_args import kicomp
 from werkzeug.serving import make_server
@@ -180,6 +180,9 @@ def get_remote_future(f, identifier, cache_path, mongod_port, db, col, key_inter
         while fsf in jobs and jobs[fsf].is_alive():
             time.sleep(4)
             logger.info("Waiting for uploading job to finish")
+            # what if due to expiration on broker, the upload didn't even finish??
+            # even if the item is expired on broker. the upload part is guaranteed to finish. as long as user does not
+            # terminate upload
 
         search_filter = {"$or": [{"identifier": identifier}, {"identifier": item['remote_identifier']}]} # TODO I think it has to be
         #  {"$or": [{"identifier": identifier}, {"remote_identifier": item['remote_identifier']}]}
@@ -196,11 +199,13 @@ def get_remote_future(f, identifier, cache_path, mongod_port, db, col, key_inter
 
 class Future:
 
-    def __init__(self, get_future_func, restart_func, terminate_func, delete_func):
+    def __init__(self, get_future_func, restart_func, terminate_func, delete_func, check_termination_func, check_deletion_func):
         self.__get_future_func = get_future_func
         self.__restart_func = restart_func
         self.__terminate_func = terminate_func
         self.__delete_func = delete_func
+        self.__check_function_termination = check_termination_func
+        self.__check_function_deletion = check_deletion_func
 
     def get(self, timeout=3600*24):
         logger = logging.getLogger(__name__)
@@ -211,18 +216,43 @@ class Future:
         while any(item[k] is None for k in item):
             item = self.__get_future_func()
             if 'error' in item and item['error'] != '':
+                print("error, maybe the item is missing on broker due to expiration, or anything else")
                 raise Exception(str(item))
             time.sleep(wait_time)
             count_time += wait_time
             if count_time > timeout:
                 raise TimeoutError("Waiting time exceeded")
-            logger.info("Not done yet " + str(item))
+        logger.info("Not done yet " + str(item))
+
         return item
 
     def restart(self):
         self.__terminate_func()
         self.__restart_func()
 
+    def delete(self):
+        self.__terminate_func()
+        # wait termination on clientworker
+        max_trials = 10
+        while True:
+            if max_trials==0:
+                raise ValueError("Unable to terminate function")
+            res = self.__check_function_termination()
+            if res.json()['status'] == True:
+                break
+            time.sleep(3)
+
+        self.__delete_func()
+        # wait deletion on both clientworker and on brokerworker
+        max_trials = 10
+        while True:
+            print("Waiting for deletion")
+            if max_trials == 0:
+                raise ValueError("Unable to delete function")
+            res = self.__check_function_deletion()
+            if res.json()['status'] == True:
+                break
+            time.sleep(3)
 
 def get_expected_keys(f):
     """
@@ -396,8 +426,10 @@ class P2PClientApp(P2PFlaskApp):
             partial(get_remote_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter, self.crypt_pass, self.jobs),
             restart_func=partial(call_remote_func, ip, port, db, col, f.__name__, filter, self.crypt_pass),
             terminate_func=partial(self.terminate_remote, filter, db, col, key_interpreter, f.__name__),
-            delete_func=partial(self.delete_remote, filter, db, col, key_interpreter, f.__name__))
-
+            delete_func=partial(self.delete_remote, filter, db, col, key_interpreter, f.__name__),
+            check_termination_func=partial(check_function_termination, ip, port, db, col, f.__name__, filter, self.crypt_pass),
+            check_deletion_func=partial(check_function_deletion, ip, port, db, col, f.__name__, filter, self.crypt_pass)
+        )
 
     def register_p2p_func(self, can_do_locally_func=lambda: False):
         """
@@ -446,7 +478,13 @@ class P2PClientApp(P2PFlaskApp):
 
                 filter = {"identifier": identifier, "remote_identifier": kwargs['remote_identifier']}
                 logger.info("Dispacthed function work to {},{}".format(lru_ip, lru_port))
-                self.start_remote(lru_ip, lru_port, db, col, f.__name__, filter, key_interpreter)
+
+                #The reason why start remote must be a subprocess is because the uploading job might take time
+                p = multiprocessing.Process(
+                    target=partial(self.start_remote, lru_ip, lru_port, db, col, f.__name__, filter, key_interpreter))
+                p.daemon = True
+                p.start()
+                self.jobs[frozenset(filter.items())] = p
                 return self.create_future(f, identifier)
 
             return wrap

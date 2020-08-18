@@ -443,19 +443,26 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
             res = requests.post(url, files={}, data=data_to_send, headers={"Authorization": password})
 
             if res.status_code == 200:
-                update_json = res.headers['update_json']
-                files = {}
-                if 'Content-Disposition' in res.headers:
-                    filename = res.headers['Content-Disposition'].split("filename=")[1]
-                    files = {filename: WrapperSave(res, filename)}
-                downloaded_data = deserializer(files, update_json)
-                merging_data.append(downloaded_data)
+                try:
+                    update_json = res.headers['update_json']
+                    files = {}
+                    if 'Content-Disposition' in res.headers:
+                        filename = res.headers['Content-Disposition'].split("filename=")[1]
+                        files = {filename: WrapperSave(res, filename)}
+                    downloaded_data = deserializer(files, update_json)
+                    merging_data.append(downloaded_data)
+                except ValueError as e:
+                    # in cases when res.headers['update_json'] does not contain update_json
+                    raise ValueError("update_json unavailable")
             else:
                 logger.info(res.content)
-        except:
+        except ValueError as e:
             traceback.print_exc()
             logger.info(traceback.format_exc())
             logger.info("Unable to post p2p data")
+            if str(e)=="update_json unavailable":
+                raise e
+
 
     update = merging_func(collection_res[0], merging_data)
 
