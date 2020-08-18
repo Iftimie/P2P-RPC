@@ -446,10 +446,7 @@ class P2PClientApp(P2PFlaskApp):
 
                 filter = {"identifier": identifier, "remote_identifier": kwargs['remote_identifier']}
                 logger.info("Dispacthed function work to {},{}".format(lru_ip, lru_port))
-                p = multiprocessing.Process(target=partial(self.start_remote, lru_ip, lru_port, db, col, f.__name__, filter, key_interpreter))
-                p.daemon = True
-                p.start()
-                self.jobs[frozenset(filter.items())] = p
+                self.start_remote(lru_ip, lru_port, db, col, f.__name__, filter, key_interpreter)
                 return self.create_future(f, identifier)
 
             return wrap

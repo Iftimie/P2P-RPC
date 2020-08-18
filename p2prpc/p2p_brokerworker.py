@@ -67,35 +67,39 @@ def check_remote_identifier(ip, port, db, col, func_name, identifier, password):
     else:
         raise ValueError("Problem")
 
+from celery import Celery
+redisport = 6379
+app = Celery('project_Alex', broker=f'redis://localhost:{redisport}/0', backend=f'redis://localhost:{redisport}')
+registry_functions = defaultdict(dict)
 
-def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_queue, password):
+@app.task
+def function_executor(f, filter, db, col, mongod_port, password):
+    """
+    """
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
     root.handlers = []
-    if logging_queue is not None:
-        # FIXME this if statement in case of debug mode was introduced just for an unfortunated combination of OS
-        #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
-        qh = logging.handlers.QueueHandler(logging_queue)
-        root.addHandler(qh)
 
     logger = logging.getLogger(__name__)
 
+    key_interpreter = registry_functions[f]['key_interpreter']
     kwargs_ = find(mongod_port, db, col, filter, key_interpreter)[0]
     kwargs = {k: kwargs_[k] for k in inspect.signature(f).parameters.keys()}
 
-    logger.info("Executing function: " + f.__name__)
+    logger.info("Executing function: " + f)
     try:
-        update_ = f(**kwargs)
+        actual_func = registry_functions[f]['original_func']
+        update_ = actual_func(**kwargs)
     except Exception as e:
         log_message = "Function execution crashed for filter: {}\n".format(str(filter)) + traceback.format_exc()
         logger.error(log_message)
         p2p_push_update_one(mongod_port, db, col, filter, {"error": log_message}, password=password)
         raise e
-    logger.info("Finished executing function: " + f.__name__)
+    logger.info("Finished executing function: " + f)
     update_['finished'] = True
     update_['progress'] = 100.0
     if not all(isinstance(k, str) for k in update_.keys()):
-        raise ValueError("All keys in the returned dictionary must be strings in func {}".format(f.__name__))
+        raise ValueError("All keys in the returned dictionary must be strings in func {}".format(f))
     try:
         p2p_push_update_one(mongod_port, db, col, filter, update_, password=password)
     except Exception as e:
@@ -190,26 +194,15 @@ def route_execute_function(f, mongod_port, db, col, key_interpreter, can_do_loca
     if len(items) == 0:
         return make_response("Filter not found {} on broker".format(filter), 404)
 
-    if can_do_locally_func():
-        new_f = wraps(f)(
-            partial(function_executor,
-                    f=f, filter=filter,
-                    mongod_port=mongod_port, db=db, col=col,
-                    key_interpreter=key_interpreter,
-                    # FIXME this if statement in case of debug mode was introduced just for an unfortunated combination of OS
-                    #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
-                    logging_queue=self._logging_queue if not is_debug_mode() else None,
-                    password=self.crypt_pass))
-        p = Process(target=new_f, daemon=True)
-        p.daemon = True
-        p.start()
-        # res = self.worker_pool.apply_async(func=new_f)
-        MongoClient(port=mongod_port)[db][col].update_one(filter, {"$set": {"started": f.__name__}})
-        print("PERSISTENT", frozenset(filter.items()) in self.jobs)
-        self.jobs[frozenset(filter.items())] = p.pid
-        print(list(self.jobs.keys()))
-    else:
-        logger.info("Cannot execute function now: " + f.__name__)
+    self.promises.append(function_executor.delay(
+        f.__name__,
+        filter,
+        db,
+        col,
+        mongod_port,
+        self.password
+    ))
+    logger.info("will add to message queue: " + f.__name__)
 
     return make_response("ok")
 
@@ -290,12 +283,11 @@ def delete_old_requests(mongod_port, registry_functions, time_limit=24, include_
                 db[col_name].remove(item)
 
 
-
 def route_registered_functions(registry_functions):
     current_items = {fname: {"bytecode": db_encoder[Callable](f['original_func'])} for fname, f in registry_functions.items()}
     return jsonify(current_items)
 
-import multiprocessing
+
 class P2PBrokerworkerApp(P2PFlaskApp):
 
     def __init__(self, discovery_ips_file, cache_path, local_port=5001, mongod_port=5101, password="", old_requests_time_limit=23, include_finished=True):
@@ -303,15 +295,11 @@ class P2PBrokerworkerApp(P2PFlaskApp):
         super(P2PBrokerworkerApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
                                                  cache_path=cache_path, password=password)
         self.roles.append("brokerworker")
-        self.registry_functions = defaultdict(dict)
+        self.registry_functions = registry_functions
+        self.promises = []
 
         # FIXME this if else statement in case of debug mode was introduced just for an unfortunated combination of OS
         #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaegr
-        if is_debug_mode():
-            self.jobs = dict()
-        else:
-            self.managerjobs = multiprocessing.Manager()
-            self.jobs = self.managerjobs.dict()
         self.register_time_regular_func(partial(delete_old_requests,
                                                 mongod_port=mongod_port,
                                                 registry_functions=self.registry_functions,
