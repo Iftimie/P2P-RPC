@@ -9,6 +9,7 @@ from p2prpc.p2p_clientworker import P2PClientworkerApp
 from p2prpc.p2p_client import select_lru_worker
 import pprint
 from pymongo import MongoClient
+import sys
 
 
 def large_file_function(video_handle: io.IOBase, random_arg: int) -> {"results": io.IOBase}:
@@ -61,16 +62,6 @@ def multiple_client_calls_client_worker(tmpdir, port_offset, func, file=None):
         print("Waiting for clientworker to know about broker")
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        num_calls = 1
-        list_futures_of_futures = []
-        for i in range(num_calls):
-            future = executor.submit(client_func, video_handle=open(file, 'rb'), random_arg=i)
-            list_futures_of_futures.append(future)
-        list_futures = [f.result() for f in list_futures_of_futures]
-        assert len(list_futures) == num_calls
-        list_results = [f.get() for f in list_futures]
-        assert len(list_results) == num_calls and all(isinstance(r, dict) for r in list_results)
-
         num_calls = 1
         list_futures_of_futures = []
         for i in range(num_calls):
@@ -160,6 +151,7 @@ def clean_and_create():
         while os.path.exists(test_dir):
             time.sleep(3)
     os.mkdir(test_dir)
+    time.sleep(3)
     return test_dir
 
 
@@ -461,30 +453,35 @@ def function_delete_on_clientworker(tmpdir, port_offset, func):
     print("Shutdown clientworker")
     time.sleep(3)
 
-
 if __name__ == "__main__":
-    # clean_and_create()
-    # multiple_client_calls_client_worker(clean_and_create(), 0, func=large_file_function)
-    # clean_and_create()
-    # multiple_client_calls_client_worker(clean_and_create(), 50, func=large_file_function_wait)
-    # clean_and_create()
-    # delete_old_requests(clean_and_create(), 100, func=actual_large_file_function_wait,
-    #                     file='/home/achellaris/big_data/torrent/torrents/Wim Hof Method/03 - Breathing/Extended breathing exercise.mp4')
-    # largef = r'/home/achellaris/big_data/torrent/torrents/The.Sopranos.S06.720p.BluRay.DD5.1.x264-DON/The.Sopranos.S06E15.Remember.When.720p.BluRay.DD5.1.x264-DON.mkv'
-    # largef = r'/home/achellaris/big_data/torrent/torrents/Wim Hof Method/03 - Breathing/Extended breathing exercise.mp4'
-    # clean_and_create()
-    # upload_only_no_execution_multiple_large_files(clean_and_create(), 1060, func=actual_large_file_function_wait,
-    #                     file=largef)
-    # clean_and_create()
-    # function_crash_on_clientworker_test(clean_and_create(), 1510, func=crashing_function,
-    #                     file=__file__)
-    # clean_and_create()
-    # function_restart_unfinished_upload_on_broker(clean_and_create(), 1610, func=long_function_upload)
-    # clean_and_create()
-    # function_restart_on_clientworker(clean_and_create(), 2050, func=long_function_upload2)
-    #
-    function_delete_on_clientworker(clean_and_create(), 150, func=long_function_upload2)
+    if len(sys.argv) == 1:
+        testnum = 0
+    else:
+        testnum = int(sys.argv[1])
+
+    if testnum==0:
+        multiple_client_calls_client_worker(clean_and_create(), 0, func=large_file_function)
+    elif testnum==1:
+        multiple_client_calls_client_worker(clean_and_create(), 50, func=large_file_function_wait)
+    elif testnum==2:
+        delete_old_requests(clean_and_create(), 100, func=actual_large_file_function_wait,
+                        file='/home/achellaris/big_data/torrent/torrents/Wim Hof Method/03 - Breathing/Extended breathing exercise.mp4')
+    elif testnum==3:
+        largef = r'/home/achellaris/big_data/torrent/torrents/The.Sopranos.S06.720p.BluRay.DD5.1.x264-DON/The.Sopranos.S06E15.Remember.When.720p.BluRay.DD5.1.x264-DON.mkv'
+        largef = r'/home/achellaris/big_data/torrent/torrents/Wim Hof Method/03 - Breathing/Extended breathing exercise.mp4'
+        upload_only_no_execution_multiple_large_files(clean_and_create(), 1060, func=actual_large_file_function_wait,
+                            file=largef)
+    elif testnum == 4:
+        function_crash_on_clientworker_test(clean_and_create(), 1510, func=crashing_function,
+                            file=__file__)
+    elif testnum == 5:
+        function_restart_unfinished_upload_on_broker(clean_and_create(), 1610, func=long_function_upload)
+    elif testnum == 6:
+        function_restart_on_clientworker(clean_and_create(), 2050, func=long_function_upload2)
+    elif testnum == 7:
+        function_delete_on_clientworker(clean_and_create(), 150, func=long_function_upload2)
+    else:
+        exit(-1)
     # # TODO I still need to test what happens to a request when it remains unsolved due to outside factors (power drop)
     # #  and not internal function errors that can be catched
     #
-    # clean_and_create()

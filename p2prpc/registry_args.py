@@ -246,6 +246,10 @@ bytes_hasher = {int: lambda value: mmh3.hash_bytes(struct.pack("i", value)),
 
 
 def hash_kwargs(doc):
+    """
+    Create a hash from the values of a document.
+    TODO maybe add the keys too?
+    """
     acc = b''
     for k in sorted(doc.keys()):
         v = doc[k]

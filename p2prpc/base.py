@@ -22,6 +22,9 @@ import subprocess
 from passlib.hash import sha256_crypt
 import pymongo
 import sys
+from collections import Callable, defaultdict
+from .registry_args import hash_kwargs
+from .p2pdata import find
 logger = logging.getLogger(__name__)
 
 
@@ -50,6 +53,115 @@ def wait_until_online(local_port, password):
                 break
         except:
             logger.info("App not ready")
+
+
+class P2PFunction:
+
+    restricted_keywords = ["identifier", "remote_identifier", "nodes", "timestamp"]
+    restricted_values = ["value_for_key_is_file"]
+
+    def __init__(self, original_function: Callable, mongod_port, crypt_pass):
+        self.original_function = original_function
+        self.function_name = original_function.__name__
+        self.args_interpreter, self.db_name, self.db_collection = self.derive_vars_from_function(original_function)
+        self.mongod_port = mongod_port
+        self.expected_return_keys = self.get_expected_keys(original_function)
+        self.crypt_pass = crypt_pass
+
+    def validate_function_signature(self, original_function):
+        """
+        Verifies that the function signature respects the required information about. The function format should be the following:
+        Each argument must be type annotated. In signature the return type must also appear as a dictionary with keys and their data types.
+        The default accepted data types are file, float, int, string.
+
+        In the future more data types could be allowed, but for each new datatype a few functions for serialization, deserialization,
+        hashing must also be supplied.
+
+        For example:
+        def f(arg1: io.IOBase, arg2: str, arg3: float, arg4: int) -> {"key1": io.IOBase, "key2": str}:
+            # do something
+            return {"key1":open(filepath, "rb"), "key2": "value2"}
+
+        There are some reserved keywords:
+        "identifier"
+        """
+        formal_args = list(inspect.signature(original_function).parameters.keys())
+        if any(key in formal_args for key in P2PFunction.restricted_keywords):
+            raise ValueError("identifier, nodes, timestamp are restricted keywords in this p2p framework")
+        if any("tmpfile" in k for k in formal_args):
+            raise ValueError("tmpfile is a restricted substring in argument names in this p2p framework")
+
+        return_anno = inspect.signature(original_function).return_annotation
+        if not "return" in inspect.getsource(original_function):
+            raise ValueError("Function must return something.")
+        if not isinstance(return_anno, dict):
+            raise ValueError("Function must be return annotated with dict")
+        if not all(isinstance(k, str) for k in return_anno.keys()):
+            raise ValueError("Return dictionary must have as keys only strings")
+        if not all(v in allowed_func_datatypes for v in return_anno.values()):
+            raise ValueError("Return values must be one of the following types {}".format(allowed_func_datatypes))
+
+        params = [v[1] for v in list(inspect.signature(original_function).parameters.items())]
+        if any(p.annotation == inspect._empty for p in params):
+            raise ValueError("Function must have all arguments type annotated")
+        if any(p.annotation not in allowed_func_datatypes for p in params):
+            raise ValueError("Function arguments must be one of the following types {}".format(allowed_func_datatypes))
+
+        if len(set(formal_args) & set(return_anno.keys())) != 0:
+            raise ValueError("The keys specified in return annotation must not be found in arguments names")
+        # TODO in the future all formal args should have type annotations
+        #  and provide serialization and deserialization methods for each
+
+    def derive_vars_from_function(self, original_function):
+        """
+        Inspects function signature and creates some necessary variables for p2p framework
+
+        Args:
+            original_function: function to be decorated
+
+        Return:
+            key_interpreter: Function is annotated as def f(arg1: io.IOBase, arg2: str)
+                the resulting dictionary will be {"arg1" io.IOBase, "arg2": str}
+            The following refer to tinymongo db
+                db_url: cache_path
+                db: hardcoded "p2p" key
+                col: function name
+        """
+        db = "p2p"
+        self.validate_function_signature(original_function)
+        key_interpreter = get_class_dictionary_from_func(original_function)
+        col = original_function.__name__
+        return key_interpreter, db, col
+
+    def get_expected_keys(self, original_function):
+        """
+        By inspecting the the function signature we can get a dictionary with the arguments (because all are annotated)
+        and a dictionary about the return (because this is required by the p2p framework)
+        The combined dictionary will be stored in the database
+        """
+        expected_keys = inspect.signature(original_function).return_annotation
+        expected_keys = {k: None for k in expected_keys}
+        expected_keys['progress'] = 0
+        expected_keys['error'] = ""
+        return expected_keys
+
+
+class P2PArguments:
+    def __init__(self, p2pfunction: P2PFunction):
+        """
+        Args:
+            p2pfunction: the function to which the current parameters belong to
+        """
+        self.__p2pfunction = p2pfunction
+        self.args_identifier = None
+        self.kwargs = None
+        self.expected_return_keys = {k:v for k, v in self.__p2pfunction.expected_return_keys}
+
+    def serialize(self):
+        function_call_properties = {k:v for k, v in self.kwargs}
+        function_call_properties['identifier'] = self.args_identifier
+        function_call_properties.update(self.expected_return_keys)
+        return function_call_properties
 
 
 class P2PBlueprint(Blueprint):
@@ -194,6 +306,7 @@ class P2PFlaskApp(Flask):
         self.discovery_ips_file = discovery_ips_file
         self.crypt_pass = sha256_crypt.encrypt(password)
         self.pass_req_dec = password_required(password)
+        self.registry_functions = defaultdict(dict)
 
         if not os.path.isabs(cache_path):
             raise ValueError("cache_path must be absolute {}".format(cache_path))
@@ -207,6 +320,11 @@ class P2PFlaskApp(Flask):
                                                        discovery_ips_file=self.discovery_ips_file, mongod_port=self.mongod_port,
                                                        password=self.crypt_pass)
         self.register_blueprint(bookkeeper_bp)
+
+    def add_to_super_register(self, p2pfunction: P2PFunction):
+        if p2pfunction.function_name in self.registry_functions:
+            raise ValueError(f"Function {p2pfunction.__name__} already registered")
+        self.registry_functions[p2pfunction.function_name] = p2pfunction
 
     def add_url_rule(self, rule, endpoint=None, view_func=None, **options):
         # Flask registers views when an application starts
@@ -390,101 +508,12 @@ def validate_update_callables(kwargs):
         "If found return value and dict return annotation. The returned value will be used to update the document in collection")
 
 
-def validate_arguments(f, args, kwargs):
-    """
-    After the function has been called, it's actual arguments are checked for some other constraints.
-    For example all arguments must be specified as keyword arguments,
-    All arguments must be instances of the declared type.
-    # TODO to prevent security issues maybe the type(arg) == declared type, not isinstance(arg, declared_type)
-    """
-    if len(args) != 0:
-        raise ValueError("All arguments to a function in this p2p framework need to be specified by keyword arguments")
-
-    # check that every value passed in this function has the same type as the one declared in function annotation
-    f_param_sign = inspect.signature(f).parameters
-    assert set(f_param_sign.keys()) == set(kwargs.keys())
-    for k, v in kwargs.items():
-        f_param_k_annotation = f_param_sign[k].annotation
-        if not isinstance(v, f_param_k_annotation):
-            raise ValueError(
-                f"class of value {v} for argument {k} is not the same as the annotation {f_param_k_annotation}")
-    if "value_for_key_is_file" in kwargs.values():
-        raise ValueError("'value_for_key_is_file' string is a reserved value in this p2p framework. It helps "
-                         "identifying a file when serializing together with other arguments")
-    files = [v for v in kwargs.values() if isinstance(v, io.IOBase)]
-    if len(files) > 1:
-        raise ValueError("p2p framework does not currently support sending more files")
-    if files:
-        if any(file.closed or file.mode != 'rb' or file.tell() != 0 for file in files):
-            raise ValueError("all files should be opened in read binary mode and pointer must be at start")
 
 
-def validate_function_signature(func):
-    """
-    Verifies that the function signature respects the required information about. The function format should be the following:
-    Each argument must be type annotated. In signature the return type must also appear as a dictionary with keys and their data types.
-    The default accepted data types are file, float, int, string.
-
-    In the future more data types could be allowed, but for each new datatype a few functions for serialization, deserialization,
-    hashing must also be supplied.
-
-    For example:
-    def f(arg1: io.IOBase, arg2: str, arg3: float, arg4: int) -> {"key1": io.IOBase, "key2": str}:
-        # do something
-        return {"key1":open(filepath, "rb"), "key2": "value2"}
-
-    There are some reserved keywords:
-    "identifier"
-    """
-    formal_args = list(inspect.signature(func).parameters.keys())
-    if any(key in formal_args for key in ["identifier", "nodes", "timestamp"]):
-        raise ValueError("identifier, nodes, timestamp are restricted keywords in this p2p framework")
-    if any("tmpfile" in k for k in formal_args):
-        raise ValueError("tmpfile is a restricted substring in argument names in this p2p framework")
-
-    return_anno = inspect.signature(func).return_annotation
-    if not "return" in inspect.getsource(func):
-        raise ValueError("Function must return something.")
-    if not isinstance(return_anno, dict):
-        raise ValueError("Function must be return annotated with dict")
-    if not all(isinstance(k, str) for k in return_anno.keys()):
-        raise ValueError("Return dictionary must have as keys only strings")
-    if not all(v in allowed_func_datatypes for v in return_anno.values()):
-        raise ValueError("Return values must be one of the following types {}".format(allowed_func_datatypes))
-
-    params = [v[1] for v in list(inspect.signature(func).parameters.items())]
-    if any(p.annotation == inspect._empty for p in params):
-        raise ValueError("Function must have all arguments type annotated")
-    if any(p.annotation not in allowed_func_datatypes for p in params):
-        raise ValueError("Function arguments must be one of the following types {}".format(allowed_func_datatypes))
-
-    if len(set(formal_args) & set(return_anno.keys())) != 0:
-        raise ValueError("The keys specified in return annotation must not be found in arguments names")
-    # TODO in the future all formal args should have type annotations
-    #  and provide serialization and deserialization methods for each
 
 
-def derive_vars_from_function(f):
-    """
-    Inspects function signature and creates some necessary variables for p2p framework
 
-    Args:
-        f: function to be decorated
-        cache_path: path to directory to store function arguments and results
 
-    Return:
-        key_interpreter: Function is annotated as def f(arg1: io.IOBase, arg2: str)
-            the resulting dictionary will be {"arg1" io.IOBase, "arg2": str}
-        The following refer to tinymongo db
-            db_url: cache_path
-            db: hardcoded "p2p" key
-            col: function name
-    """
-    db = "p2p"
-    validate_function_signature(f)
-    key_interpreter = get_class_dictionary_from_func(f)
-    col = f.__name__
-    return key_interpreter, db, col
 
 
 def configure_logger(name, module_level_list=None, default_level='WARNING'):

@@ -1,4 +1,4 @@
-from .base import P2PFlaskApp, validate_arguments, create_bookkeeper_p2pblueprint, is_debug_mode
+from .base import P2PFlaskApp, P2PFunction, P2PArguments, create_bookkeeper_p2pblueprint, is_debug_mode
 from functools import wraps
 from functools import partial
 from .p2pdata import p2p_push_update_one, p2p_insert_one
@@ -13,11 +13,9 @@ import time
 import threading
 import inspect
 import requests
-from .base import derive_vars_from_function
 from .registry_args import hash_kwargs, db_encoder
 from .p2p_brokerworker import check_remote_identifier, check_function_termination, check_function_deletion
 from .p2pdata import find
-from .registry_args import kicomp
 from werkzeug.serving import make_server
 from .base import configure_logger
 import os
@@ -26,6 +24,7 @@ from collections import defaultdict, Callable
 from p2prpc.p2pdata import update_one
 import tempfile
 import pickle
+from .registry_args import kicomp
 from pymongo import MongoClient
 from p2prpc.registry_args import deserialize_doc_from_db, remove_values_from_doc
 import dis
@@ -254,93 +253,132 @@ class Future:
                 break
             time.sleep(3)
 
-def get_expected_keys(f):
-    """
-    By inspecting the the function signature we can get a dictionary with the arguments (because all are annotated)
-    and a dictionary about the return (because this is required by the p2p framework)
-    The combined dictionary will be stored in the database
-    """
-    expected_keys = inspect.signature(f).return_annotation
-    expected_keys = {k: None for k in expected_keys}
-    expected_keys['progress'] = 0
-    expected_keys['error'] = ""
-    return expected_keys
+
+class P2PClientFunction:
+    def __init__(self, original_function: Callable, mongod_port, crypt_pass):
+        self.p2pfunction = P2PFunction(original_function, mongod_port, crypt_pass)
+        self.__salt_pepper_identifier = 1
+
+    def validate_arguments(self, args, kwargs):
+        """
+        After the function has been called, it's actual arguments are checked for some other constraints.
+        For example all arguments must be specified as keyword arguments,
+        All arguments must be instances of the declared type.
+        # TODO to prevent security issues maybe the type(arg) == declared type, not isinstance(arg, declared_type)
+        """
+        if len(args) != 0:
+            raise ValueError("All arguments to a function in this p2p framework need to be specified by keyword arguments")
+
+        # check that every value passed in this function has the same type as the one declared in function annotation
+        f_param_sign = inspect.signature(self.p2pfunction.original_function).parameters
+        assert set(f_param_sign.keys()) == set(kwargs.keys())
+        for k, v in kwargs.items():
+            f_param_k_annotation = f_param_sign[k].annotation
+            if not isinstance(v, f_param_k_annotation):
+                raise ValueError(
+                    f"class of value {v} for argument {k} is not the same as the annotation {f_param_k_annotation}")
+        for value in P2PFunction.restricted_values:
+            if value in kwargs.values():
+                raise ValueError(f"'{value}' string is a reserved value in this p2p framework. It helps "
+                                 "identifying a file when serializing together with other arguments")
+        files = [v for v in kwargs.values() if isinstance(v, io.IOBase)]
+        if len(files) > 1:
+            raise ValueError("p2p framework does not currently support sending more than one file")
+        if files:
+            if any(file.closed or file.mode != 'rb' or file.tell() != 0 for file in files):
+                raise ValueError("all files should be opened in read binary mode and pointer must be at start")
+
+    def create_arguments_identifier(self, kwargs):
+        """
+        A hash from the arguments will be created that will help to easily identify the set of arguments for later retrieval
+
+        Args:
+            kwargs: the provided function keyword arguments
+        Returns:
+            identifier: string
+        """
+        identifier = hash_kwargs({k: v for k, v in kwargs.items() if k in self.p2pfunction.args_interpreter})
+        identifier_original = identifier  # deepcopy
+
+        while True:
+            collection = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection,
+                              {"identifier": identifier}, self.p2pfunction.args_interpreter)
+            if len(collection) == 0:
+                # we found an identifier that is not in DB
+                return identifier
+            elif len(collection) != 1:
+                # we should find only one doc that has the same hash
+                raise ValueError("Multiple documents for a hash")
+            elif all(kicomp(kwargs[k]) == kicomp(item[k]) for item in collection for k in kwargs):
+                # we found exactly 1 doc with the same hash and we must check that it has the same arguments
+                return identifier
+            else:
+                # we found different arguments that produce the same hash so we must modify the hash determinastically
+                identifier = identifier_original + str(self.__salt_pepper_identifier)
+                self.__salt_pepper_identifier += 1
+                if self.__salt_pepper_identifier > 100:
+                    raise ValueError("Too many hash collisions. Change the hash function")
+
+    def create_arguments_remote_identifier(self, local_args_identifier, ip, port):
+        """
+        A remote identifier is created in order to prevent name collisions in worker nodes.
+        """
+        args = {"ip": ip, "port": port, "db": self.p2pfunction.db_name,
+                "col": self.p2pfunction.db_collection,
+                "func_name": self.p2pfunction.function_name,
+                "password": self.p2pfunction.crypt_pass}
+        count = 1
+        original_local_identifier = local_args_identifier
+        while True:
+            args['identifier'] = local_args_identifier
+            if check_remote_identifier(**args):
+                return local_args_identifier
+            else:
+                local_args_identifier = original_local_identifier + str(count)
+                count += 1
+                if count > 100:
+                    raise ValueError("Too many hash collisions. Change the hash function")
 
 
-def identifier_seen(mongod_port, identifier, db, col, expected_keys, key_interpreter, time_limit=24):
-    """
-    Returns boolean about if the current arguments resulted in an identifier that was already seen
-    """
-    logger = logging.getLogger(__name__)
+class P2PClientArguments:
+    def __init__(self, p2pclientfunction: P2PClientFunction, args, kwargs):
+        self.p2pclientfunction = p2pclientfunction
+        self.p2parguments = P2PArguments(p2pclientfunction.p2pfunction)
+        self.p2pclientfunction.validate_arguments(args, kwargs)
+        self.p2parguments.args_identifier = self.p2pclientfunction.create_arguments_identifier(kwargs)
+        self.p2parguments.kwargs = kwargs
 
-    collection = find(mongod_port, db, col, {"identifier": identifier}, key_interpreter)
 
-    if collection:
-        assert len(collection) == 1
-        item = collection[0]
-        if (time.time() - item['timestamp']) > time_limit * 3600 and any(item[k] is None for k in expected_keys):
-            # TODO the entry should actually be deleted instead of letting it be overwritten
-            #  for elegancy
-            logger.info("Time limit exceeded for item with identifier: "+item['identifier'])
+    def arguments_already_submited(self, time_limit=24):
+        """
+        Returns boolean about if the current arguments resulted in an identifier that was already seen
+
+        Args:
+            args_identifier: string representing the hash of the function arguments. Created by create_arguments_identifier
+        """
+        logger = logging.getLogger(__name__)
+
+        collection = find(self.p2pclientfunction.p2pfunction.mongod_port,
+                          self.p2pclientfunction.p2pfunction.db_name,
+                          self.p2pclientfunction.p2pfunction.db_collection,
+                          {"identifier": self.p2parguments.args_identifier},
+                          self.p2pclientfunction.p2pfunction.args_interpreter)
+
+        if collection:
+            assert len(collection) == 1
+            item = collection[0]
+            if (time.time() - item['timestamp']) > time_limit * 3600 and any(
+                    item[k] is None for k in self.p2parguments.expected_return_keys.expected_return_keys):
+                # TODO the entry should actually be deleted instead of letting it be overwritten
+                #  for elegancy
+                logger.info("Time limit exceeded for item with identifier: " + item['identifier'])
+                return False
+            else:
+                return True
+        else:
             return False
-        else:
-            return True
-    else:
-        return False
 
 
-def create_identifier(mongod_port, db, col, kwargs, key_interpreter_dict):
-    """
-    A hash from the arguments will be created that will help to easily identify the set of arguments for later retrieval
-
-    Args:
-        db_url, db, col: arguments for tinymongo db
-        kwargs: the provided function keyword arguments
-        key_interpreter_dict: dictionary containing key and the expected data type. Used for decoding arguments from the
-            database in case the initial created identifier already exists (for different reasons)
-
-    Returns:
-        identifier: string
-    """
-    identifier = hash_kwargs({k:v for k, v in kwargs.items() if k in key_interpreter_dict})
-    identifier_original = identifier  # deepcopy
-
-    count = 1
-    while True:
-        collection = find(mongod_port, db, col, {"identifier": identifier}, key_interpreter_dict)
-        if len(collection) == 0:
-            # we found an identifier that is not in DB
-            return identifier
-        elif len(collection) != 1:
-            # we should find only one doc that has the same hash
-            raise ValueError("Multiple documents for a hash")
-        elif all(kicomp(kwargs[k]) == kicomp(item[k]) for item in collection for k in kwargs):
-            # we found exactly 1 doc with the same hash and we must check that it has the same arguments
-            return identifier
-        else:
-            # we found different arguments that produce the same hash so we must modify the hash determinastically
-            identifier = identifier_original + str(count)
-            count += 1
-            if count > 100:
-                raise ValueError("Too many hash collisions. Change the hash function")
-
-
-def create_remote_identifier(local_identifier, check_remote_identifier_args):
-    """
-    A remote identifier is created in order to prevent name collisions in worker nodes.
-    """
-    original_local_identifier = local_identifier
-    args = {k: v for k, v in check_remote_identifier_args.items()}
-    count = 1
-    while True:
-        args['identifier'] = local_identifier
-        if check_remote_identifier(**args):
-            return local_identifier
-        else:
-            local_identifier = original_local_identifier + str(count)
-            count += 1
-            if count > 100:
-                raise ValueError("Too many hash collisions. Change the hash function")
 
 
 class ServerThread(threading.Thread):
@@ -386,7 +424,6 @@ class P2PClientApp(P2PFlaskApp):
         self.roles.append("client")
         self.jobs = dict()
         self.background_server = None
-        self.registry_functions = defaultdict(dict)
 
     def start_remote(self, lru_ip, lru_port, db, col, fname, filter_, ki):
         kwargs = find(self.mongod_port, db, col, filter_, ki)[0]
@@ -445,26 +482,21 @@ class P2PClientApp(P2PFlaskApp):
         """
 
         def inner_decorator(f):
-            if f.__name__ in self.registry_functions:
-                raise ValueError(f"Function {f.__name__} already registered")
-            key_interpreter, db, col = derive_vars_from_function(f)
-            self.registry_functions[f.__name__]['original_func'] = f
+            p2pfunction = P2PClientFunction(f, self.mongod_port, self.crypt_pass)
+            self.add_to_super_register(p2pfunction)
 
             @wraps(f)
             def wrap(*args, **kwargs):
                 logger = logging.getLogger(__name__)
 
-                identifier = create_identifier(self.mongod_port, db, col, kwargs, key_interpreter)
-                expected_keys = get_expected_keys(f)
-                if identifier_seen(self.mongod_port, identifier, db, col, expected_keys, key_interpreter):
+                p2pclientarguments = P2PClientArguments(p2pfunction, args, kwargs)
+                if p2pclientarguments.arguments_already_submited():
                     logger.info("Returning future that may already be precomputed")
-                    return self.create_future(f, identifier)
-
-                validate_arguments(f, args, kwargs)
-                kwargs.update(expected_keys)
-                kwargs['identifier'] = identifier
+                    return self.create_future(f, p2pclientarguments.p2parguments.args_identifier)
 
                 lru_ip, lru_port = select_lru_worker(self.local_port, f, self.crypt_pass)
+                if lru_ip is None:
+                    raise ValueError("No broker found")
 
                 # TODO put all of this in a job
                 nodes = [str(lru_ip) + ":" + str(lru_port)]
