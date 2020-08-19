@@ -347,7 +347,12 @@ class P2PClientArguments:
         self.p2pclientfunction.validate_arguments(args, kwargs)
         self.p2parguments.args_identifier = self.p2pclientfunction.create_arguments_identifier(kwargs)
         self.p2parguments.kwargs = kwargs
+        self.remote_args_identifier = None
 
+    def object2doc(self):
+        function_call_properties = self.p2parguments.object2doc()
+        function_call_properties['remote_identifier'] = self.remote_args_identifier
+        return function_call_properties
 
     def arguments_already_submited(self, time_limit=24):
         """
@@ -377,8 +382,6 @@ class P2PClientArguments:
                 return True
         else:
             return False
-
-
 
 
 class ServerThread(threading.Thread):
@@ -482,14 +485,14 @@ class P2PClientApp(P2PFlaskApp):
         """
 
         def inner_decorator(f):
-            p2pfunction = P2PClientFunction(f, self.mongod_port, self.crypt_pass)
-            self.add_to_super_register(p2pfunction)
+            p2pclientfunction = P2PClientFunction(f, self.mongod_port, self.crypt_pass)
+            self.add_to_super_register(p2pclientfunction)
 
             @wraps(f)
             def wrap(*args, **kwargs):
                 logger = logging.getLogger(__name__)
 
-                p2pclientarguments = P2PClientArguments(p2pfunction, args, kwargs)
+                p2pclientarguments = P2PClientArguments(p2pclientfunction, args, kwargs)
                 if p2pclientarguments.arguments_already_submited():
                     logger.info("Returning future that may already be precomputed")
                     return self.create_future(f, p2pclientarguments.p2parguments.args_identifier)
@@ -499,14 +502,19 @@ class P2PClientApp(P2PFlaskApp):
                     raise ValueError("No broker found")
 
                 # TODO put all of this in a job
+                p2pclientarguments.remote_args_identifier = p2pclientfunction.create_arguments_remote_identifier(
+                    p2pclientarguments.p2parguments.args_identifier,
+                    lru_ip, lru_port
+                )
                 nodes = [str(lru_ip) + ":" + str(lru_port)]
-                kwargs['remote_identifier'] = create_remote_identifier(kwargs['identifier'],
-                                                                       {"ip": lru_ip, "port": lru_port, "db": db,
-                                                                        "col": col, "func_name": f.__name__,
-                                                                        "password": self.crypt_pass})
-                p2p_insert_one(self.mongod_port, db, col, kwargs, nodes,
+
+                serializable_document = p2pclientarguments.object2doc()
+                p2p_insert_one(self.mongod_port, p2pclientfunction.p2pfunction.db_name,
+                               p2pclientfunction.p2pfunction.db_collection, serializable_document,
+                               nodes,
                                current_address_func=partial(self_is_reachable, self.local_port),
                                password=self.crypt_pass, do_upload=False)
+                # AICI am ramas
 
                 filter = {"identifier": identifier, "remote_identifier": kwargs['remote_identifier']}
                 logger.info("Dispacthed function work to {},{}".format(lru_ip, lru_port))

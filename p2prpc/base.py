@@ -157,7 +157,10 @@ class P2PArguments:
         self.kwargs = None
         self.expected_return_keys = {k:v for k, v in self.__p2pfunction.expected_return_keys}
 
-    def serialize(self):
+    def object2doc(self):
+        """
+        Transform the current object into a mongodb serializable dictionary (document)
+        """
         function_call_properties = {k:v for k, v in self.kwargs}
         function_call_properties['identifier'] = self.args_identifier
         function_call_properties.update(self.expected_return_keys)
