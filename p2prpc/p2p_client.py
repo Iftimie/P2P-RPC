@@ -339,6 +339,20 @@ class P2PClientFunction:
                 if count > 100:
                     raise ValueError("Too many hash collisions. Change the hash function")
 
+    def start_remote(self, ip, port, p2pclientarguments, local_port):
+        """
+        """
+        filter_ = p2pclientarguments.create_generic_filter()
+
+        serializable_document = p2pclientarguments.object2doc()
+
+        nodes = [str(ip) + ":" + str(port)]
+        p2p_insert_one(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection,
+                       serializable_document, nodes,
+                       current_address_func=partial(self_is_reachable, local_port),
+                       password=self.p2pfunction.crypt_pass, do_upload=True)
+        call_remote_func(ip, port, self.p2pfunction.db_name, self.p2pfunction.db_collection, self.p2pfunction.function_name,
+                         filter_, self.p2pfunction.crypt_pass)
 
 class P2PClientArguments:
     def __init__(self, p2pclientfunction: P2PClientFunction, args, kwargs):
@@ -353,6 +367,11 @@ class P2PClientArguments:
         function_call_properties = self.p2parguments.object2doc()
         function_call_properties['remote_identifier'] = self.remote_args_identifier
         return function_call_properties
+
+    def create_generic_filter(self):
+        filter_ = {"identifier": self.p2parguments.args_identifier,
+                   "remote_identifier": self.remote_args_identifier}
+        return filter_
 
     def arguments_already_submited(self, time_limit=24):
         """
@@ -428,17 +447,7 @@ class P2PClientApp(P2PFlaskApp):
         self.jobs = dict()
         self.background_server = None
 
-    def start_remote(self, lru_ip, lru_port, db, col, fname, filter_, ki):
-        kwargs = find(self.mongod_port, db, col, filter_, ki)[0]
-        kwargs_ = {k: v for k,v in kwargs.items() if k in ki}
-        other_keys = ['identifier', 'remote_identifier', 'progress', 'error']
-        kwargs_.update({k: kwargs[k] for k in other_keys})
 
-        nodes = [str(lru_ip) + ":" + str(lru_port)]
-        p2p_insert_one(self.mongod_port, db, col, kwargs_, nodes,
-                       current_address_func=partial(self_is_reachable, self.local_port),
-                       password=self.crypt_pass, do_upload=True)
-        call_remote_func(lru_ip, lru_port, db, col, fname, filter_, self.crypt_pass)
 
     def terminate_remote(self, filter_, db, col, ki, funcname):
         item = find(self.mongod_port, db, col, filter_, ki)[0]
@@ -456,19 +465,23 @@ class P2PClientApp(P2PFlaskApp):
         ip, port = item['nodes'][0].split(":")
         delete_remote_func(ip, port, db, col, funcname, filter_, self.crypt_pass)
 
-    def create_future(self, f, identifier):
-        key_interpreter, db, col = derive_vars_from_function(f)
-        item = find(self.mongod_port, db, col, {"identifier": identifier}, key_interpreter)[0]
+    def create_future(self, p2pclientfunction, identifier):
+        # key_interpreter, db, col = derive_vars_from_function(f)
+        item = find(p2pclientfunction.p2pfunction.mongod_port,
+                    p2pclientfunction.p2pfunction.db_name,
+                    p2pclientfunction.p2pfunction.db_collection,
+                    {"identifier": identifier},
+                    p2pclientfunction.p2pfunction.args_interpreter)[0]
 
         filter = {"identifier": identifier, "remote_identifier": item['remote_identifier']}
         ip, port = item['nodes'][0].split(":")
         return Future(
-            partial(get_remote_future, f, identifier, self.cache_path, self.mongod_port, db, col, key_interpreter, self.crypt_pass, self.jobs),
-            restart_func=partial(call_remote_func, ip, port, db, col, f.__name__, filter, self.crypt_pass),
-            terminate_func=partial(self.terminate_remote, filter, db, col, key_interpreter, f.__name__),
-            delete_func=partial(self.delete_remote, filter, db, col, key_interpreter, f.__name__),
-            check_termination_func=partial(check_function_termination, ip, port, db, col, f.__name__, filter, self.crypt_pass),
-            check_deletion_func=partial(check_function_deletion, ip, port, db, col, f.__name__, filter, self.crypt_pass)
+            partial(get_remote_future, p2pclientfunction.p2pfunction.original_function, identifier, self.cache_path, self.mongod_port, p2pclientfunction.p2pfunction.db_name, p2pclientfunction.p2pfunction.db_collection, p2pclientfunction.p2pfunction.args_interpreter, self.crypt_pass, self.jobs),
+            restart_func=partial(call_remote_func, ip, port, p2pclientfunction.p2pfunction.db_name, p2pclientfunction.p2pfunction.db_collection, p2pclientfunction.p2pfunction.function_name, filter, self.crypt_pass),
+            terminate_func=partial(self.terminate_remote, filter,p2pclientfunction.p2pfunction.db_name, p2pclientfunction.p2pfunction.db_collection, p2pclientfunction.p2pfunction.args_interpreter, p2pclientfunction.p2pfunction.function_name),
+            delete_func=partial(self.delete_remote, filter, p2pclientfunction.p2pfunction.db_name, p2pclientfunction.p2pfunction.db_collection, p2pclientfunction.p2pfunction.args_interpreter, p2pclientfunction.p2pfunction.function_name),
+            check_termination_func=partial(check_function_termination, ip, port, p2pclientfunction.p2pfunction.db_name, p2pclientfunction.p2pfunction.db_collection, p2pclientfunction.p2pfunction.function_name, filter, self.crypt_pass),
+            check_deletion_func=partial(check_function_deletion, ip, port, p2pclientfunction.p2pfunction.db_name, p2pclientfunction.p2pfunction.db_collection, p2pclientfunction.p2pfunction.function_name, filter, self.crypt_pass)
         )
 
     def register_p2p_func(self, can_do_locally_func=lambda: False):
@@ -486,7 +499,7 @@ class P2PClientApp(P2PFlaskApp):
 
         def inner_decorator(f):
             p2pclientfunction = P2PClientFunction(f, self.mongod_port, self.crypt_pass)
-            self.add_to_super_register(p2pclientfunction)
+            self.add_to_super_register(p2pclientfunction.p2pfunction)
 
             @wraps(f)
             def wrap(*args, **kwargs):
@@ -495,7 +508,7 @@ class P2PClientApp(P2PFlaskApp):
                 p2pclientarguments = P2PClientArguments(p2pclientfunction, args, kwargs)
                 if p2pclientarguments.arguments_already_submited():
                     logger.info("Returning future that may already be precomputed")
-                    return self.create_future(f, p2pclientarguments.p2parguments.args_identifier)
+                    return self.create_future(p2pclientfunction, p2pclientarguments.p2parguments.args_identifier)
 
                 lru_ip, lru_port = select_lru_worker(self.local_port, f, self.crypt_pass)
                 if lru_ip is None:
@@ -514,18 +527,17 @@ class P2PClientApp(P2PFlaskApp):
                                nodes,
                                current_address_func=partial(self_is_reachable, self.local_port),
                                password=self.crypt_pass, do_upload=False)
-                # AICI am ramas
+                # here it does not upload. it only registers locally
 
-                filter = {"identifier": identifier, "remote_identifier": kwargs['remote_identifier']}
                 logger.info("Dispacthed function work to {},{}".format(lru_ip, lru_port))
 
                 #The reason why start remote must be a subprocess is because the uploading job might take time
                 p = multiprocessing.Process(
-                    target=partial(self.start_remote, lru_ip, lru_port, db, col, f.__name__, filter, key_interpreter))
+                    target=partial(p2pclientfunction.start_remote, lru_ip, lru_port, p2pclientarguments, self.local_port))
                 p.daemon = True
                 p.start()
-                self.jobs[frozenset(filter.items())] = p
-                return self.create_future(f, identifier)
+                self.jobs[frozenset(p2pclientarguments.create_generic_filter().items())] = p
+                return self.create_future(p2pclientfunction, p2pclientarguments.p2parguments.args_identifier)
 
             return wrap
 

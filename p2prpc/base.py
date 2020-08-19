@@ -23,8 +23,6 @@ from passlib.hash import sha256_crypt
 import pymongo
 import sys
 from collections import Callable, defaultdict
-from .registry_args import hash_kwargs
-from .p2pdata import find
 logger = logging.getLogger(__name__)
 
 
@@ -54,6 +52,69 @@ def wait_until_online(local_port, password):
         except:
             logger.info("App not ready")
 
+def validate_function_signature(original_function):
+    """
+    Verifies that the function signature respects the required information about. The function format should be the following:
+    Each argument must be type annotated. In signature the return type must also appear as a dictionary with keys and their data types.
+    The default accepted data types are file, float, int, string.
+
+    In the future more data types could be allowed, but for each new datatype a few functions for serialization, deserialization,
+    hashing must also be supplied.
+
+    For example:
+    def f(arg1: io.IOBase, arg2: str, arg3: float, arg4: int) -> {"key1": io.IOBase, "key2": str}:
+        # do something
+        return {"key1":open(filepath, "rb"), "key2": "value2"}
+
+    There are some reserved keywords:
+    "identifier"
+    """
+    formal_args = list(inspect.signature(original_function).parameters.keys())
+    if any(key in formal_args for key in P2PFunction.restricted_keywords):
+        raise ValueError("identifier, nodes, timestamp are restricted keywords in this p2p framework")
+    if any("tmpfile" in k for k in formal_args):
+        raise ValueError("tmpfile is a restricted substring in argument names in this p2p framework")
+
+    return_anno = inspect.signature(original_function).return_annotation
+    if not "return" in inspect.getsource(original_function):
+        raise ValueError("Function must return something.")
+    if not isinstance(return_anno, dict):
+        raise ValueError("Function must be return annotated with dict")
+    if not all(isinstance(k, str) for k in return_anno.keys()):
+        raise ValueError("Return dictionary must have as keys only strings")
+    if not all(v in allowed_func_datatypes for v in return_anno.values()):
+        raise ValueError("Return values must be one of the following types {}".format(allowed_func_datatypes))
+
+    params = [v[1] for v in list(inspect.signature(original_function).parameters.items())]
+    if any(p.annotation == inspect._empty for p in params):
+        raise ValueError("Function must have all arguments type annotated")
+    if any(p.annotation not in allowed_func_datatypes for p in params):
+        raise ValueError("Function arguments must be one of the following types {}".format(allowed_func_datatypes))
+
+    if len(set(formal_args) & set(return_anno.keys())) != 0:
+        raise ValueError("The keys specified in return annotation must not be found in arguments names")
+    # TODO in the future all formal args should have type annotations
+    #  and provide serialization and deserialization methods for each
+def derive_vars_from_function( original_function):
+    """
+    Inspects function signature and creates some necessary variables for p2p framework
+
+    Args:
+        original_function: function to be decorated
+
+    Return:
+        key_interpreter: Function is annotated as def f(arg1: io.IOBase, arg2: str)
+            the resulting dictionary will be {"arg1" io.IOBase, "arg2": str}
+        The following refer to tinymongo db
+            db_url: cache_path
+            db: hardcoded "p2p" key
+            col: function name
+    """
+    db = "p2p"
+    validate_function_signature(original_function)
+    key_interpreter = get_class_dictionary_from_func(original_function)
+    col = original_function.__name__
+    return key_interpreter, db, col
 
 class P2PFunction:
 
@@ -155,13 +216,13 @@ class P2PArguments:
         self.__p2pfunction = p2pfunction
         self.args_identifier = None
         self.kwargs = None
-        self.expected_return_keys = {k:v for k, v in self.__p2pfunction.expected_return_keys}
+        self.expected_return_keys = {k:v for k, v in self.__p2pfunction.expected_return_keys.items()}
 
     def object2doc(self):
         """
         Transform the current object into a mongodb serializable dictionary (document)
         """
-        function_call_properties = {k:v for k, v in self.kwargs}
+        function_call_properties = {k:v for k, v in self.kwargs.items()}
         function_call_properties['identifier'] = self.args_identifier
         function_call_properties.update(self.expected_return_keys)
         return function_call_properties
