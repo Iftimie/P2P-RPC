@@ -87,16 +87,29 @@ def check_brokerworker_deletion(self):
     logger = logging.getLogger(__name__)
 
     for funcname in self.registry_functions:
-        f = self.registry_functions[funcname].original_function
-        key_interpreter, db, col = derive_vars_from_function(f)
+        p2pworkerfunction = self.registry_functions[funcname]
+
+        allp2pworkerarguments = p2pworkerfunction.list_all_arguments()
+
+
+        mongodport = p2pworkerfunction.p2pfunction.mongod_port
+        db_name = p2pworkerfunction.p2pfunction.db_name
+        db_collection = p2pworkerfunction.p2pfunction.db_collection
+        identifiers = list(item['identifier'] for item in MongoClient(port=mongodport)[db_name][db_collection].find({}))
+
+        p2pworkerarguments = []
+        for identifier in identifiers:
+            filter = {"identifier": identifier}
+            p2pworkerargument = p2pworkerfunction.load_arguments_from_db(filter)
+            if p2pworkerargument.started == 'available':
+                p2pworkerarguments.append(p2pworkerargument)
+
         items = find(self.mongod_port, db, col, {})
         for item in items:
-            print("asdasdasdasd")
             search_filter = {"$or": [{"identifier": item['identifier']}, {"identifier": item['remote_identifier']}]}
             p2p_pull_update_one(self.mongod_port, db, col, search_filter, ['delete_clientworker'],
                                 deserializer=partial(deserialize_doc_from_net, up_dir=None), password=self.crypt_pass)
             itemtodel = find(self.mongod_port, db, col, search_filter)[0]
-            print("itemtodel", itemtodel)
             if itemtodel['delete_clientworker'] is True:
                 mongodb = MongoClient(port=self.mongod_port)[db][col]
                 p2p_push_update_one(self.mongod_port, db, col, search_filter, {'delete_clientworker': False}, password=self.crypt_pass)
@@ -146,6 +159,27 @@ class P2PWorkerFunction:
         self.updir = os.path.join(cache_path, self.p2pfunction.db_name, self.p2pfunction.db_collection)  # upload directory
         self.hint_args_file_keys = [k for k, v in inspect.signature(original_function).parameters.items() if v.annotation == io.IOBase]
         self.deserializer = partial(deserialize_doc_from_net, up_dir=self.updir, key_interpreter=self.p2pfunction.args_interpreter)
+
+    def load_arguments_from_db(self, filter_):
+        items = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
+                     self.p2pfunction.args_interpreter)
+        if len(items) == 0:
+            return None
+        p2pbrokerarguments = P2PWorkerArguments(self.p2pfunction.expected_keys, self.p2pfunction.expected_return_keys)
+        p2pbrokerarguments.doc2object(items[0])
+        return p2pbrokerarguments
+
+    def list_all_arguments(self):
+        mongodport = self.p2pfunction.mongod_port
+        db_name = self.p2pfunction.db_name
+        db_collection = self.p2pfunction.db_collection
+        identifiers = list(item['identifier'] for item in MongoClient(port=mongodport)[db_name][db_collection].find({}))
+
+        p2pworkerarguments = []
+        for identifier in identifiers:
+            filter = {"identifier": identifier}
+            p2pworkerarguments.append(self.load_arguments_from_db(filter))
+        return p2pworkerarguments
 
     def download_arguments(self, filter_, broker_ip, broker_port):
         p2pworkerarguments = P2PWorkerArguments(self.p2pfunction.expected_keys,

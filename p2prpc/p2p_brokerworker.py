@@ -128,6 +128,18 @@ class P2PBrokerFunction:
         p2pbrokerarguments.doc2object(items[0])
         return p2pbrokerarguments
 
+    def list_all_arguments(self):
+        mongodport = self.p2pfunction.mongod_port
+        db_name = self.p2pfunction.db_name
+        db_collection = self.p2pfunction.db_collection
+        identifiers = list(item['identifier'] for item in MongoClient(port=mongodport)[db_name][db_collection].find({}))
+
+        p2pbrokerarguments = []
+        for identifier in identifiers:
+            filter = {"identifier": identifier}
+            p2pbrokerarguments.append(self.load_arguments_from_db(filter))
+        return p2pbrokerarguments
+
     def update_arguments_in_db(self, filter, keylist, p2pbrokerarguments):
         serializable_document = p2pbrokerarguments.object2doc()
         newvalues = {k:serializable_document[k] for k in keylist}
@@ -290,17 +302,8 @@ def route_execute_function(p2pbrokerfunction):
 
 def route_search_work(p2pbrokerfunction):
     logger = logging.getLogger(__name__)
-    mongodport = p2pbrokerfunction.p2pfunction.mongod_port
-    db_name = p2pbrokerfunction.p2pfunction.db_name
-    db_collection = p2pbrokerfunction.p2pfunction.db_collection
-    identifiers = list(item['identifier'] for item in MongoClient(port=mongodport)[db_name][db_collection].find({}))
 
-    p2pbrokerarguments = []
-    for identifier in identifiers:
-        filter = {"identifier": identifier}
-        p2pbrokerargument = p2pbrokerfunction.load_arguments_from_db(filter)
-        if p2pbrokerargument.started == 'available':
-            p2pbrokerarguments.append(p2pbrokerargument)
+    p2pbrokerarguments = [a for a in p2pbrokerfunction.list_all_arguments() if a.started=='available']
 
     if not p2pbrokerarguments:
         return jsonify({})
