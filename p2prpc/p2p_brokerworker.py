@@ -84,6 +84,67 @@ def check_remote_identifier(ip, port, db, col, func_name, identifier, password):
         raise ValueError("Problem")
 
 
+from .base import P2PFunction
+from .base import P2PArguments
+
+class P2PBrokerArguments:
+    def __init__(self, expected_keys, expected_return_keys):
+        self.p2parguments = P2PArguments(expected_keys, expected_return_keys)
+        self.started = None # TODO maybe this property should also stau in p2parguments
+        self.kill_clientworker = None
+        self.delete_clientworker = None
+        self.timestamp = None
+        self.remote_args_identifier = None
+
+    def object2doc(self):
+        function_call_properties = self.p2parguments.object2doc()
+        function_call_properties['started'] = self.started
+        function_call_properties['kill_clientworker'] = self.kill_clientworker
+        function_call_properties['delete_clientworker'] = self.delete_clientworker
+        return function_call_properties
+
+    def doc2object(self, document):
+        self.p2parguments.doc2object(document)
+        self.timestamp = document['timestamp'] # should exist
+        self.remote_args_identifier = document['remote_identifier']
+        if "started" in document:
+            self.started = document['started']
+        if "kill_clientworker" in document:
+            self.kill_clientworker = document['kill_clientworker']
+        if 'delete_clientworker' in document:
+            self.delete_clientworker = document['delete_clientworker']
+
+
+class P2PBrokerFunction:
+    def __init__(self, original_function: Callable, mongod_port, crypt_pass):
+        self.p2pfunction = P2PFunction(original_function, mongod_port, crypt_pass)
+
+    def load_arguments_from_db(self, filter_):
+        items = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
+                     self.p2pfunction.args_interpreter)
+        if len(items) == 0:
+            return None
+        p2pbrokerarguments = P2PBrokerArguments(self.p2pfunction.expected_keys, self.p2pfunction.expected_return_keys)
+        p2pbrokerarguments.doc2object(items[0])
+        return p2pbrokerarguments
+
+    def update_arguments_in_db(self, filter, keylist, p2pbrokerarguments):
+        serializable_document = p2pbrokerarguments.object2doc()
+        newvalues = {k:serializable_document[k] for k in keylist}
+        MongoClient(port=self.p2pfunction.mongod_port)[self.p2pfunction.db_name][self.p2pfunction.db_collection].update_one(
+            filter, {"$set": newvalues})
+
+    def remove_arguments_from_db(self, filter_):
+
+        item = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection,
+                    filter_)[0]
+        document = deserialize_doc_from_db(item, self.p2pfunction.args_interpreter)
+        remove_values_from_doc(document)
+
+        MongoClient(port=self.p2pfunction.mongod_port)[self.p2pfunction.db_name][
+            self.p2pfunction.db_collection].delete_one(filter_)
+
+
 def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_queue, password):
     """
     """
@@ -122,118 +183,62 @@ def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_
     return update_
 
 
-def route_terminate_function(mongod_port, db, col, self):
+def route_terminate_function(p2pbrokerfunction):
     logger = logging.getLogger(__name__)
 
     filter = loads(request.form['filter_json'])
-
+    p2pbrokerarguments = p2pbrokerfunction.load_arguments_from_db(filter)
+    if p2pbrokerarguments is None:
+        return make_response("Filter not found {} on broker".format(filter), 404)
+    p2pbrokerarguments.kill_clientworker = True
+    p2pbrokerfunction.update_arguments_in_db(filter, ['kill_clientworker'], p2pbrokerarguments)
     # must be a clientworker that is doing the job
-    MongoClient(port=mongod_port)[db][col].update_one(filter, {"$set": {"kill_clientworker": True}})
     logger.info("job is on clientworker {} added notification for termination".format(filter))
     return make_response("ok", 200)
 
 
-def route_delete_function(mongod_port, db, col, self):
+def route_delete_function(p2pbrokerfunction):
     logger = logging.getLogger(__name__)
 
     filter = loads(request.form['filter_json'])
-
-    MongoClient(port=mongod_port)[db][col].update_one(filter, {"$set": {"delete_clientworker": True}}, upsert=True)
+    p2pbrokerarguments = p2pbrokerfunction.load_arguments_from_db(filter)
+    if p2pbrokerarguments is None:
+        return make_response("Filter not found {} on broker".format(filter), 404)
+    p2pbrokerarguments.delete_clientworker = True
+    p2pbrokerfunction.update_arguments_in_db(filter, ['delete_clientworker'], p2pbrokerarguments)
     logger.info("job is on clientworker {} added notification for deletion".format(filter))
-    item = find(mongod_port, db, col, filter)[0]
-    print("Item marked for deletion", item)
     return make_response("ok", 200)
 
 
-def route_check_function_termination(mongod_port, db, col):
+def route_check_function_termination(p2pbrokerfunction):
     filter = loads(request.form['filter_json'])
+    p2pbrokerarguments = p2pbrokerfunction.load_arguments_from_db(filter)
+    if p2pbrokerarguments is None:
+        return make_response("Filter not found {} on broker".format(filter), 404)
 
-    list_items = find(mongod_port, db, col, filter) # It may happen that an item was deleted
-    if list_items:
-        item = list_items[0]
-        if item['started']=='terminated' and item['kill_clientworker'] is False:
-            return jsonify({"status": True})
-        else:
-            return jsonify({"status": False})
+    if p2pbrokerarguments.started == 'terminated' and p2pbrokerarguments.kill_clientworker is False:
+        return jsonify({"status": True})
     else:
         return jsonify({"status": False})
 
 
-def route_check_function_deletion(mongod_port, db, col, self):
+def route_check_function_deletion(p2pbrokerfunction):
     filter = loads(request.form['filter_json'])
+    p2pbrokerarguments = p2pbrokerfunction.load_arguments_from_db(filter)
+    if p2pbrokerarguments is None:
+        return make_response("Filter not found {} on broker".format(filter), 404)
 
+    # IF job is on client worker, then a remainder of the job must still exist here
+    # TODO small remainings should still exist, but the big data is important to be deleted
 
-    list_items = find(mongod_port, db, col, filter) # It may happen that an item was deleted
-    if list_items:
-        item = list_items[0]
-        # IF job is on client worker, then a remainder of the job must still exist here
-        # TODO small remainings should still exist, but the big data is important to be deleted
-
-        # there should be some mechanism so that a document is deleted only after the clientworker deleted it
-        if item['started']=='terminated' and item['delete_clientworker'] is False:
-            original_func = self.registry_functions[col].original_function
-            key_interpreter, db_name, col = derive_vars_from_function(original_func)
-            mongodb = MongoClient(port=self.mongod_port)[db_name][col] # my mystake was that I did not put db_name
-            # item = list(mongodb.find(filter))[0] #
-            item = find(mongod_port, db, col, filter)[0]
-            document = deserialize_doc_from_db(item, key_interpreter)
-            remove_values_from_doc(document)
-            mongodb.delete_one(item)
-            # mongodb.delete_one(filter)
-            print("ITEM TO DEL", item)
-            print("DUPA STERGERE", find(self.mongod_port, db, col, filter))
-
-            return jsonify({"status": True})
-        else:
-            return jsonify({"status": False})
+    # there should be some mechanism so that a document is deleted only after the clientworker deleted it
+    if p2pbrokerarguments.started=='terminated' and p2pbrokerarguments.delete_clientworker is False:
+        # we need to check that delete_clientworker is False because before the call of function_deletion, a signal was sent as
+        # delete_clientworker is True so that the clientworker can delete it
+        p2pbrokerfunction.remove_arguments_from_db(filter)
+        return jsonify({"status": True})
     else:
         return jsonify({"status": False})
-
-from .base import P2PFunction
-from .base import P2PArguments
-
-class P2PBrokerArguments:
-    def __init__(self, expected_keys, expected_return_keys):
-        self.p2parguments = P2PArguments(expected_keys, expected_return_keys)
-        self.started = None # TODO maybe this property should also stau in p2parguments
-        self.kill_clientworker = None
-        self.delete_clientworker = None
-
-    def object2doc(self):
-        function_call_properties = self.p2parguments.object2doc()
-        function_call_properties['started'] = self.started
-        function_call_properties['kill_clientworker'] = self.kill_clientworker
-        function_call_properties['delete_clientworker'] = self.delete_clientworker
-        return function_call_properties
-
-    def doc2object(self, document):
-        self.p2parguments.doc2object(document)
-        if "started" in document:
-            self.started = document['started']
-        if "kill_clientworker" in document:
-            self.kill_clientworker = document['kill_clientworker']
-        if 'delete_clientworker' in document:
-            self.delete_clientworker = document['delete_clientworker']
-
-
-class P2PBrokerFunction:
-    def __init__(self, original_function: Callable, mongod_port, crypt_pass):
-        self.p2pfunction = P2PFunction(original_function, mongod_port, crypt_pass)
-
-    def load_arguments_from_db(self, filter_):
-        items = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
-                     self.p2pfunction.args_interpreter)
-        if len(items) == 0:
-            return None
-        p2pbrokerarguments = P2PBrokerArguments(self.p2pfunction.expected_keys, self.p2pfunction.expected_return_keys)
-        p2pbrokerarguments.doc2object(items[0])
-        return p2pbrokerarguments
-
-    def update_arguments_in_db(self, filter, keylist, p2pbrokerarguments):
-        serializable_document = p2pbrokerarguments.object2doc()
-        newvalues = {k:serializable_document[k] for k in keylist}
-        MongoClient(port=self.p2pfunction.mongod_port)[self.p2pfunction.db_name][self.p2pfunction.db_collection].update_one(
-            filter, {"$set": newvalues})
 
 def route_execute_function(p2pbrokerfunction):
     """
@@ -273,29 +278,34 @@ def route_execute_function(p2pbrokerfunction):
     return make_response("ok")
 
 
-def route_search_work(mongod_port, db, collection, func_name, time_limit):
+def route_search_work(p2pbrokerfunction):
     logger = logging.getLogger(__name__)
+    mongodport = p2pbrokerfunction.p2pfunction.mongod_port
+    db_name = p2pbrokerfunction.p2pfunction.db_name
+    db_collection = p2pbrokerfunction.p2pfunction.db_collection
+    identifiers = list(item['identifier'] for item in MongoClient(port=mongodport)[db_name][db_collection].find({}))
 
-    col = list(MongoClient(port=mongod_port)[db][collection].find({}))
+    p2pbrokerarguments = []
+    for identifier in identifiers:
+        filter = {"identifier": identifier}
+        p2pbrokerargument = p2pbrokerfunction.load_arguments_from_db(filter)
+        if p2pbrokerargument.started == 'available':
+            p2pbrokerarguments.append(p2pbrokerargument)
 
-
-    col2 = filter(lambda item: 'started' in item and item['started'] == 'available', col)
-
-    col = list(col2)
-    # TODO fix this. it returns items that have finished
-    if col:
-
-        col.sort(key=lambda item: item["timestamp"])  # might allready be sorted
-        item = col[0]
-        filter_ = {"identifier": item["identifier"], "remote_identifier": item['remote_identifier']}
-        logger.info("Node{}(possible client worker) will ask for filter: {}".format(request.remote_addr, str(filter_)))
-        MongoClient(port=mongod_port)[db][collection].update_one(filter_, {"$set": {"started": func_name}},)
-        return jsonify({"filter": filter_})
-    else:
+    if not p2pbrokerarguments:
         return jsonify({})
 
+    p2pbrokerarguments.sort(key=lambda arg: arg.timestamp)
+    p2pbrokerargument = p2pbrokerarguments[0]
+    filter_ = {"identifier": p2pbrokerargument.p2parguments.args_identifier,
+               "remote_identifier": p2pbrokerargument.remote_args_identifier}
+    p2pbrokerargument.started = 'in_progress'
+    p2pbrokerfunction.update_arguments_in_db(filter_, ['started'], p2pbrokerargument)
+    logger.info("Node{}(possible client worker) will ask for filter: {}".format(request.remote_addr, str(filter_)))
+    return jsonify({"filter": filter_})
 
-def route_identifier_available(mongod_port, db, col, identifier):
+
+def route_identifier_available(p2pbrokerfunction, identifier):
     """
     Function designed to be decorated with flask.app.route
     The function should be partially applied will all arguments
@@ -305,14 +315,14 @@ def route_identifier_available(mongod_port, db, col, identifier):
     Args from network:
         identifier: string will be received when there is a http call
     Args from partial application of the function:
-        db_path, db, col are part of tinymongo db
+        p2pbrokerfunction
     """
-    collection = find(mongod_port, db, col, {"identifier": identifier})
-    if len(collection) == 0:
+    filter = {'identifier': identifier}
+    p2pbrokerarguments = p2pbrokerfunction.load_arguments_from_db(filter)
+    if p2pbrokerarguments is None:
         return make_response("yes", 200)
     else:
         return make_response("no", 404)
-
 
 def heartbeat(mongod_port, db="tms"):
     """
@@ -390,8 +400,9 @@ class P2PBrokerworkerApp(P2PFlaskApp):
             updir = os.path.join(self.cache_path,
                                  p2pbrokerfunction.p2pfunction.db_name,
                                  p2pbrokerfunction.p2pfunction.db_collection)  # upload directory
-            db = p2pbrokerfunction.p2pfunction.db_name
-            col = p2pbrokerfunction.p2pfunction.db_collection
+            db_name = p2pbrokerfunction.p2pfunction.db_name
+            db_collection = p2pbrokerfunction.p2pfunction.db_collection
+            function_name = p2pbrokerfunction.p2pfunction.function_name
             key_interpreter = p2pbrokerfunction.p2pfunction.args_interpreter
             os.makedirs(updir, exist_ok=True)
 
@@ -408,70 +419,68 @@ class P2PBrokerworkerApp(P2PFlaskApp):
             # these functions below make more sense in p2p_data.py
             p2p_route_insert_one_func = wraps(p2p_route_insert_one)(
                 partial(self.pass_req_dec(p2p_route_insert_one),
-                        db=db, col=col, mongod_port=self.mongod_port,
+                        db=db_name, col=db_collection, mongod_port=self.mongod_port,
                         deserializer=partial(deserialize_doc_from_net, up_dir=updir, key_interpreter=key_interpreter)))
-
-            self.route("/insert_one/{db}/{col}".format(db=db, col=col), methods=['POST'])(p2p_route_insert_one_func)
+            self.route(f"/insert_one/{db_name}/{db_collection}", methods=['POST'])(p2p_route_insert_one_func)
 
             p2p_route_push_update_one_func = wraps(p2p_route_push_update_one)(
                 partial(self.pass_req_dec(p2p_route_push_update_one),
-                        mongod_port=self.mongod_port, db=db, col=col,
+                        mongod_port=self.mongod_port, db=db_name, col=db_collection,
                         deserializer=partial(deserialize_doc_from_net, up_dir=updir, key_interpreter=key_interpreter)))
-            self.route("/push_update_one/{db}/{col}".format(db=db, col=col), methods=['POST'])(
+            self.route(f"/push_update_one/{db_name}/{db_collection}", methods=['POST'])(
                 p2p_route_push_update_one_func)
 
             p2p_route_pull_update_one_func = wraps(p2p_route_pull_update_one)(
                 partial(self.pass_req_dec(p2p_route_pull_update_one),
-                        mongod_port=self.mongod_port, db=db, col=col))
-            self.route("/pull_update_one/{db}/{col}".format(db=db, col=col), methods=['POST'])(
+                        mongod_port=self.mongod_port, db=db_name, col=db_collection))
+            self.route(f"/pull_update_one/{db_name}/{db_collection}", methods=['POST'])(
                 p2p_route_pull_update_one_func)
 
             execute_function_partial = wraps(route_execute_function)(
                 partial(self.pass_req_dec(route_execute_function),
                         p2pbrokerfunction=p2pbrokerfunction))
-            self.route('/execute_function/{db}/{col}/{fname}'.format(db=db, col=col, fname=f.__name__),
+            self.route(f'/execute_function/{db_name}/{db_collection}/{function_name}',
                        methods=['POST'])(execute_function_partial)
 
             terminate_function_partial = wraps(route_terminate_function)(
                 partial(self.pass_req_dec(route_terminate_function),
-                        mongod_port=self.mongod_port, db=db, col=col, self=self))
-            self.route('/terminate_function/{db}/{col}/{fname}'.format(db=db, col=col, fname=f.__name__),
+                        p2pbrokerfunction=p2pbrokerfunction))
+            self.route(f'/terminate_function/{db_name}/{db_collection}/{function_name}',
                        methods=['POST'])(terminate_function_partial)
 
             delete_function_partial = wraps(route_delete_function)(
                 partial(self.pass_req_dec(route_delete_function),
-                        mongod_port=self.mongod_port, db=db, col=col, self=self))
-            self.route('/delete_function/{db}/{col}/{fname}'.format(db=db, col=col, fname=f.__name__),
+                        p2pbrokerfunction=p2pbrokerfunction))
+            self.route(f'/delete_function/{db_name}/{db_collection}/{function_name}',
                        methods=['POST'])(delete_function_partial)
 
             check_function_termination_partial = wraps(route_check_function_termination)(
                 partial(self.pass_req_dec(route_check_function_termination),
-                        mongod_port=self.mongod_port, db=db, col=col))
-            self.route('/check_function_termination/{db}/{col}/{fname}'.format(db=db, col=col, fname=f.__name__),
+                        p2pbrokerfunction=p2pbrokerfunction))
+            self.route(f'/check_function_termination/{db_name}/{db_collection}/{function_name}',
                        methods=['POST'])(check_function_termination_partial)
 
             check_function_deletion_partial = wraps(route_check_function_deletion)(
                 partial(self.pass_req_dec(route_check_function_deletion),
-                        mongod_port=self.mongod_port, db=db, col=col, self=self))
-            self.route('/check_function_deletion/{db}/{col}/{fname}'.format(db=db, col=col, fname=f.__name__),
+                        p2pbrokerfunction=p2pbrokerfunction))
+            self.route(f'/check_function_deletion/{db_name}/{db_collection}/{function_name}',
                        methods=['POST'])(check_function_deletion_partial)
 
             search_work_partial = wraps(route_search_work)(
                 partial(self.pass_req_dec(route_search_work),
-                        mongod_port=self.mongod_port, db=db, collection=col,
-                        func_name=f.__name__, time_limit=time_limit))
-            self.route("/search_work/{db}/{col}/{fname}".format(db=db, col=col, fname=f.__name__), methods=['POST'])(
+                        p2pbrokerfunction=p2pbrokerfunction))
+            self.route(f"/search_work/{db_name}/{db_collection}/{function_name}", methods=['POST'])(
                 search_work_partial)
 
             identifier_available_partial = wraps(route_identifier_available)(
                 partial(self.pass_req_dec(route_identifier_available),
-                        mongod_port=self.mongod_port, db=db, col=col))
-            self.route("/identifier_available/{db}/{col}/{fname}/<identifier>".format(db=db, col=col, fname=f.__name__),
+                        p2pbrokerfunction=p2pbrokerfunction))
+            self.route(f"/identifier_available/{db_name}/{db_collection}/{function_name}/<identifier>",
                        methods=['GET'])(identifier_available_partial)
 
             registered_functions_partial = wraps(route_registered_functions)(
                 partial(self.pass_req_dec(route_registered_functions),
                         registry_functions=self.registry_functions))
-            self.route("/registered_functions/", methods=['GET'])(registered_functions_partial)
+            self.route(f"/registered_functions/", methods=['GET'])(registered_functions_partial)
 
         return inner_decorator
