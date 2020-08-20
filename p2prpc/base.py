@@ -496,7 +496,10 @@ class P2PFlaskApp(Flask):
         self._stop_thread = True
         logger.info("Joining time regular thread")
         print("Joining time regular thread")
-        self._time_regular_thread.join()
+        self._time_regular_thread.join(timeout=120)
+        if self._time_regular_thread.isAlive():
+            logger.info("time regular thread still Alive")
+            print("time regular thread still Alive")
         self._logging_queue.put_nowait('STOP _dispatch_log_records')
         logger.info("Joining logger thread")
         print("Joining time logger thread")

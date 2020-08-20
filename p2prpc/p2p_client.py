@@ -37,7 +37,7 @@ def select_lru_worker(local_port, func, password):
     func_bytecode = db_encoder[Callable](func)
     logger = logging.getLogger(__name__)
     try:
-        res = requests.get('http://localhost:{}/node_states'.format(local_port)).json()  # will get the data defined above
+        res = requests.get('http://localhost:{}/node_states'.format(local_port), timeout=120).json()  # will get the data defined above
     except:
         logger.info(traceback.format_exc())
         return None, None

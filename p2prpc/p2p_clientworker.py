@@ -35,7 +35,7 @@ def find_response_with_work(local_port, db, collection, func_name, password):
         broker_address = broker['address']
         try:
             url = 'http://{}/search_work/{}/{}/{}'.format(broker_address, db, collection, func_name)
-            res = requests.post(url, timeout=5, headers={"Authorization": password})
+            res = requests.post(url, timeout=120, headers={"Authorization": password})
             if isinstance(res.json, collections.Callable):
                 returned_json = res.json()  # from requests lib
             else: # is property
@@ -113,13 +113,64 @@ def check_brokerworker_deletion(self):
 
 from .base import P2PArguments, P2PFunction
 class P2PWorkerArguments:
-    def __init__(self):
-        pass
+    def __init__(self, expected_keys, expected_return_keys):
+        self.p2parguments = P2PArguments(expected_keys, expected_return_keys)
+        self.started = None # TODO maybe this property should also stau in p2parguments
+        self.kill_clientworker = None
+        self.delete_clientworker = None
+        self.remote_args_identifier = None #TODO. this item appears in all 3 classes. refactor
+
+    def object2doc(self):
+        function_call_properties = self.p2parguments.object2doc()
+        function_call_properties['remote_identifier'] = self.remote_args_identifier
+        function_call_properties['started'] = self.started
+        function_call_properties['kill_clientworker'] = self.kill_clientworker
+        function_call_properties['delete_clientworker'] = self.delete_clientworker
+        return function_call_properties
+
+    def doc2object(self, document):
+        self.p2parguments.doc2object(document)
+        self.remote_args_identifier = document['remote_identifier']
+        if "started" in document:
+            self.started = document['started']
+        if "kill_clientworker" in document:
+            self.kill_clientworker = document['kill_clientworker']
+        if 'delete_clientworker' in document:
+            self.delete_clientworker = document['delete_clientworker']
+
 
 from collections import Callable
 class P2PWorkerFunction:
-    def __init__(self, original_function: Callable, mongod_port, crypt_pass):
+    def __init__(self, original_function: Callable, mongod_port, crypt_pass, cache_path):
         self.p2pfunction = P2PFunction(original_function, mongod_port, crypt_pass)
+        self.updir = os.path.join(cache_path, self.p2pfunction.db_name, self.p2pfunction.db_collection)  # upload directory
+        self.hint_args_file_keys = [k for k, v in inspect.signature(original_function).parameters.items() if v.annotation == io.IOBase]
+        self.deserializer = partial(deserialize_doc_from_net, up_dir=self.updir, key_interpreter=self.p2pfunction.args_interpreter)
+
+    def download_arguments(self, filter_, broker_ip, broker_port):
+        p2pworkerarguments = P2PWorkerArguments(self.p2pfunction.expected_keys,
+                                                self.p2pfunction.expected_return_keys)
+        p2pworkerarguments.remote_args_identifier = filter_['remote_identifier']
+        p2pworkerarguments.p2parguments.args_identifier = filter_['identifier']
+        serializable_document = p2pworkerarguments.object2doc()
+
+        current_list_with_identifier = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection,
+                                            filter_, self.p2pfunction.args_interpreter)
+        if len(current_list_with_identifier) == 0:
+            # TODO only insert if identifier was not allready downloaded
+            #  otherwise in case of restart, the clientworker will redownload the data and it will crash in
+            #  p2p_pull_update_one when checking   if len(collection_res) != 1:
+            #  because p2p_insert_one makes a duplicate????
+            p2p_insert_one(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection,
+                           serializable_document, [broker_ip + ":" + str(broker_port)],
+                           do_upload=False, password=self.p2pfunction.crypt_pass)
+        p2p_pull_update_one(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
+                            p2pworkerarguments.p2parguments.expected_keys, self.deserializer,
+                            hint_file_keys=self.hint_args_file_keys, password=self.p2pfunction.crypt_pass)
+        items = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
+                     self.p2pfunction.args_interpreter)
+        p2pworkerarguments.doc2object(items[0])
+        return p2pworkerarguments
 
 
 class P2PClientworkerApp(P2PFlaskApp):
@@ -156,17 +207,14 @@ class P2PClientworkerApp(P2PFlaskApp):
         """
 
         def inner_decorator(f):
-            p2pworkerfunction = P2PWorkerFunction(f, self.mongod_port, self.crypt_pass)
+            p2pworkerfunction = P2PWorkerFunction(f, self.mongod_port, self.crypt_pass, self.cache_path)
             self.add_to_super_register(p2pworkerfunction.p2pfunction)
 
-            key_interpreter, db, col = derive_vars_from_function(f)
-
-            updir = os.path.join(self.cache_path, db, col)  # upload directory
-            os.makedirs(updir, exist_ok=True)
-
-            param_keys = list(inspect.signature(f).parameters.keys())
-            key_return = list(inspect.signature(f).return_annotation.keys())
-            hint_args_file_keys = [k for k, v in inspect.signature(f).parameters.items() if v.annotation == io.IOBase]
+            db_name = p2pworkerfunction.p2pfunction.db_name
+            db_collection = p2pworkerfunction.p2pfunction.db_collection
+            function_name = p2pworkerfunction.p2pfunction.function_name
+            key_interpreter = p2pworkerfunction.p2pfunction.args_interpreter
+            os.makedirs(p2pworkerfunction.updir, exist_ok=True)
 
             @wraps(f)
             def wrap():
@@ -174,41 +222,23 @@ class P2PClientworkerApp(P2PFlaskApp):
                     return
                 logger = logging.getLogger(__name__)
                 logger.info("Searching for work")
-                res, broker_ip, broker_port = find_response_with_work(self.local_port, db, col, f.__name__,
+                res, broker_ip, broker_port = find_response_with_work(self.local_port, db_name, db_collection, function_name,
                                                                       self.crypt_pass)
                 if broker_ip is None:
                     return
 
                 filter_ = res['filter']
-
-                local_data = {k: v for k, v in filter_.items()}
-                local_data.update({k: None for k in param_keys})
-                local_data.update({k: None for k in key_return})
-                local_data.update({"started":None, "kill_clientworker": None, "delete_clientworker": None})
-
-                deserializer = partial(deserialize_doc_from_net, up_dir=updir, key_interpreter=key_interpreter)
-
-                current_list_with_identifier = find(self.mongod_port, db, col, filter_, key_interpreter)
-                if len(current_list_with_identifier)==0:
-                    # TODO only insert if identifier was not allready downloaded
-                    #  otherwise in case of restart, the clientworker will redownload the data and it will crash in
-                    #  p2p_pull_update_one when checking   if len(collection_res) != 1:
-                    p2p_insert_one(self.mongod_port, db, col, local_data, [broker_ip + ":" + str(broker_port)],
-                                   do_upload=False, password=self.crypt_pass)
-                p2p_pull_update_one(self.mongod_port, db, col, filter_, param_keys, deserializer,
-                                    hint_file_keys=hint_args_file_keys, password=self.crypt_pass)
+                p2pworkerarguments = p2pworkerfunction.download_arguments(filter_, broker_ip, broker_port)
 
                 new_f = wraps(f)(
                     partial(function_executor,
-                            f=f, filter=filter_,
-                            mongod_port=self.mongod_port, db=db, col=col,
-                            key_interpreter=key_interpreter,
+                            p2pworkerfunction=p2pworkerfunction,
+                            p2pworkerarguments=p2pworkerarguments,
                             # FIXME this if statement in case of debug mode was introduced just for an unfortunated combination of OS
                             #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
-                            logging_queue=self._logging_queue if not is_debug_mode() else None,
-                            password=self.crypt_pass))
+                            logging_queue=self._logging_queue if not is_debug_mode() else None))
 
-                self.start_local(new_f, filter_, db, col, f.__name__)
+                self.start_local(new_f, filter_, db_name, db_collection, function_name)
 
             self.register_time_regular_func(wrap)
             return None

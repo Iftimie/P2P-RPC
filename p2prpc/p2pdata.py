@@ -440,7 +440,7 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
         try:
             data_to_send = {"req_keys_json": req_keys_json, "filter_json": filter_json, "hint_file_keys_json": hint_file_keys_json}
             url = "http://{}/pull_update_one/{}/{}".format(node, db, col)
-            res = requests.post(url, files={}, data=data_to_send, headers={"Authorization": password})
+            res = requests.post(url, files={}, data=data_to_send, headers={"Authorization": password}, timeout=120)
 
             if res.status_code == 200:
                 try:

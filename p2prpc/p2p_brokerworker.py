@@ -145,7 +145,7 @@ class P2PBrokerFunction:
             self.p2pfunction.db_collection].delete_one(filter_)
 
 
-def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_queue, password):
+def function_executor(p2pworkerfunction, p2pworkerarguments, logging_queue):
     """
     """
     root = logging.getLogger()
@@ -159,24 +159,34 @@ def function_executor(f, filter, db, col, mongod_port, key_interpreter, logging_
 
     logger = logging.getLogger(__name__)
 
-    kwargs_ = find(mongod_port, db, col, filter, key_interpreter)[0]
-    kwargs = {k: kwargs_[k] for k in inspect.signature(f).parameters.keys()}
-
-    logger.info("Executing function: " + f.__name__)
+    function_name = p2pworkerfunction.p2pfunction.function_name
+    interpreted_kwargs = p2pworkerarguments.p2parguments.kwargs
+    original_function = p2pworkerfunction.p2pfunction.original_function
+    logger.info("Executing function: " + p2pworkerfunction.p2pfunction.function_name)
+    filter_ = {'identifier': p2pworkerarguments.p2parguments.args_identifier,
+               'remote_identifier': p2pworkerarguments.remote_args_identifier}
     try:
-        update_ = f(**kwargs)
+        update_ = original_function(**interpreted_kwargs)
     except Exception as e:
         log_message = "Function execution crashed for filter: {}\n".format(str(filter)) + traceback.format_exc()
         logger.error(log_message)
-        p2p_push_update_one(mongod_port, db, col, filter, {"error": log_message}, password=password)
+        p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port,
+                            p2pworkerfunction.p2pfunction.db_name,
+                            p2pworkerfunction.p2pfunction.db_collection,
+                            filter_, {"error": log_message},
+                            password=p2pworkerfunction.p2pfunction.crypt_pass)
         raise e
-    logger.info("Finished executing function: " + f.__name__)
+    logger.info("Finished executing function: " + function_name)
     update_['progress'] = 100.0
     update_['started'] = 'terminated'
     if not all(isinstance(k, str) for k in update_.keys()):
-        raise ValueError("All keys in the returned dictionary must be strings in func {}".format(f.__name__))
+        raise ValueError(f"All keys in the returned dictionary must be strings in func {function_name}")
     try:
-        p2p_push_update_one(mongod_port, db, col, filter, update_, password=password)
+        p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port,
+                            p2pworkerfunction.p2pfunction.db_name,
+                            p2pworkerfunction.p2pfunction.db_collection,
+                            filter_, update_,
+                            password=p2pworkerfunction.p2pfunction.crypt_pass)
     except Exception as e:
         logger.error("Results pushing to server resulted in errors", exc_info=True)
         raise e
