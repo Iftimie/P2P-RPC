@@ -198,7 +198,9 @@ def get_remote_future(f, identifier, cache_path, mongod_port, db, col, key_inter
 
 class Future:
 
-    def __init__(self, get_future_func, restart_func, terminate_func, delete_func, check_termination_func, check_deletion_func):
+    def __init__(self, get_future_func, restart_func, terminate_func, delete_func, check_termination_func, check_deletion_func, expected_return_keys):
+        self.expected_return_keys = expected_return_keys
+        self.expected_return_keys.remove('error')
         self.__get_future_func = get_future_func
         self.__restart_func = restart_func
         self.__terminate_func = terminate_func
@@ -212,9 +214,9 @@ class Future:
         item = self.__get_future_func()
         count_time = 0
         wait_time = 4
-        while any(item[k] is None for k in item):
+        while any(item[k] is None for k in self.expected_return_keys):
             item = self.__get_future_func()
-            if 'error' in item and item['error'] != '':
+            if 'error' in item and item['error'] != None:
                 print("error, maybe the item is missing on broker due to expiration, or anything else")
                 raise Exception(str(item))
             time.sleep(wait_time)
@@ -254,9 +256,31 @@ class Future:
             time.sleep(3)
 
 
+class P2PClientArguments:
+    def __init__(self, kwargs, expected_return_keys):
+        self.p2parguments = P2PArguments(list(kwargs.keys()), expected_return_keys)
+        self.p2parguments.kwargs.update(kwargs)
+        self.remote_args_identifier = None
+
+    def object2doc(self):
+        function_call_properties = self.p2parguments.object2doc()
+        function_call_properties['remote_identifier'] = self.remote_args_identifier
+        return function_call_properties
+
+    def doc2object(self, document):
+        self.p2parguments.doc2object(document)
+        self.remote_args_identifier = document['remote_identifier']
+
+    def create_generic_filter(self):
+        filter_ = {"identifier": self.p2parguments.args_identifier,
+                   "remote_identifier": self.remote_args_identifier}
+        return filter_
+
+
 class P2PClientFunction:
-    def __init__(self, original_function: Callable, mongod_port, crypt_pass):
+    def __init__(self, original_function: Callable, mongod_port, crypt_pass, local_port):
         self.p2pfunction = P2PFunction(original_function, mongod_port, crypt_pass)
+        self.local_port = local_port
         self.__salt_pepper_identifier = 1
 
     def validate_arguments(self, args, kwargs):
@@ -339,7 +363,7 @@ class P2PClientFunction:
                 if count > 100:
                     raise ValueError("Too many hash collisions. Change the hash function")
 
-    def start_remote(self, ip, port, p2pclientarguments, local_port):
+    def start_remote(self, ip, port, p2pclientarguments):
         """
         """
         filter_ = p2pclientarguments.create_generic_filter()
@@ -349,32 +373,22 @@ class P2PClientFunction:
         nodes = [str(ip) + ":" + str(port)]
         p2p_insert_one(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection,
                        serializable_document, nodes,
-                       current_address_func=partial(self_is_reachable, local_port),
+                       current_address_func=partial(self_is_reachable, self.local_port),
                        password=self.p2pfunction.crypt_pass, do_upload=True)
         call_remote_func(ip, port, self.p2pfunction.db_name, self.p2pfunction.db_collection, self.p2pfunction.function_name,
                          filter_, self.p2pfunction.crypt_pass)
 
-class P2PClientArguments:
-    def __init__(self, p2pclientfunction: P2PClientFunction, args, kwargs):
-        self.p2pclientfunction = p2pclientfunction
-        self.p2parguments = P2PArguments(p2pclientfunction.p2pfunction)
-        self.p2pclientfunction.validate_arguments(args, kwargs)
-        self.p2parguments.args_identifier = self.p2pclientfunction.create_arguments_identifier(kwargs)
-        self.p2parguments.kwargs = kwargs
-        self.remote_args_identifier = None
+    def register_arguments_in_db(self, p2pclientarguments, nodes):
+        serializable_document = p2pclientarguments.object2doc()
+        p2p_insert_one(self.p2pfunction.mongod_port, self.p2pfunction.db_name,
+                       self.p2pfunction.db_collection, serializable_document,
+                       nodes,
+                       current_address_func=partial(self_is_reachable, self.local_port),
+                       password=self.p2pfunction.crypt_pass, do_upload=False)
 
-    def object2doc(self):
-        function_call_properties = self.p2parguments.object2doc()
-        function_call_properties['remote_identifier'] = self.remote_args_identifier
-        return function_call_properties
-
-    def create_generic_filter(self):
-        filter_ = {"identifier": self.p2parguments.args_identifier,
-                   "remote_identifier": self.remote_args_identifier}
-        return filter_
-
-    def arguments_already_submited(self, time_limit=24):
+    def arguments_already_submited(self, p2pclientarguments, time_limit=24):
         """
+        # TODO this function may stay better in P2Pclientfunction class
         Returns boolean about if the current arguments resulted in an identifier that was already seen
 
         Args:
@@ -382,17 +396,17 @@ class P2PClientArguments:
         """
         logger = logging.getLogger(__name__)
 
-        collection = find(self.p2pclientfunction.p2pfunction.mongod_port,
-                          self.p2pclientfunction.p2pfunction.db_name,
-                          self.p2pclientfunction.p2pfunction.db_collection,
-                          {"identifier": self.p2parguments.args_identifier},
-                          self.p2pclientfunction.p2pfunction.args_interpreter)
+        collection = find(self.p2pfunction.mongod_port,
+                          self.p2pfunction.db_name,
+                          self.p2pfunction.db_collection,
+                          {"identifier": p2pclientarguments.p2parguments.args_identifier},
+                          self.p2pfunction.args_interpreter)
 
         if collection:
             assert len(collection) == 1
             item = collection[0]
             if (time.time() - item['timestamp']) > time_limit * 3600 and any(
-                    item[k] is None for k in self.p2parguments.expected_return_keys.expected_return_keys):
+                    item[k] is None for k in self.p2pfunction.expected_return_keys):
                 # TODO the entry should actually be deleted instead of letting it be overwritten
                 #  for elegancy
                 logger.info("Time limit exceeded for item with identifier: " + item['identifier'])
@@ -401,7 +415,6 @@ class P2PClientArguments:
                 return True
         else:
             return False
-
 
 class ServerThread(threading.Thread):
 
@@ -481,7 +494,8 @@ class P2PClientApp(P2PFlaskApp):
             terminate_func=partial(self.terminate_remote, filter,p2pclientfunction.p2pfunction.db_name, p2pclientfunction.p2pfunction.db_collection, p2pclientfunction.p2pfunction.args_interpreter, p2pclientfunction.p2pfunction.function_name),
             delete_func=partial(self.delete_remote, filter, p2pclientfunction.p2pfunction.db_name, p2pclientfunction.p2pfunction.db_collection, p2pclientfunction.p2pfunction.args_interpreter, p2pclientfunction.p2pfunction.function_name),
             check_termination_func=partial(check_function_termination, ip, port, p2pclientfunction.p2pfunction.db_name, p2pclientfunction.p2pfunction.db_collection, p2pclientfunction.p2pfunction.function_name, filter, self.crypt_pass),
-            check_deletion_func=partial(check_function_deletion, ip, port, p2pclientfunction.p2pfunction.db_name, p2pclientfunction.p2pfunction.db_collection, p2pclientfunction.p2pfunction.function_name, filter, self.crypt_pass)
+            check_deletion_func=partial(check_function_deletion, ip, port, p2pclientfunction.p2pfunction.db_name, p2pclientfunction.p2pfunction.db_collection, p2pclientfunction.p2pfunction.function_name, filter, self.crypt_pass),
+            expected_return_keys=p2pclientfunction.p2pfunction.expected_return_keys
         )
 
     def register_p2p_func(self, can_do_locally_func=lambda: False):
@@ -498,15 +512,17 @@ class P2PClientApp(P2PFlaskApp):
         """
 
         def inner_decorator(f):
-            p2pclientfunction = P2PClientFunction(f, self.mongod_port, self.crypt_pass)
+            p2pclientfunction = P2PClientFunction(f, self.mongod_port, self.crypt_pass, self.local_port)
             self.add_to_super_register(p2pclientfunction.p2pfunction)
 
             @wraps(f)
             def wrap(*args, **kwargs):
                 logger = logging.getLogger(__name__)
 
-                p2pclientarguments = P2PClientArguments(p2pclientfunction, args, kwargs)
-                if p2pclientarguments.arguments_already_submited():
+                p2pclientfunction.validate_arguments(args, kwargs)
+                p2pclientarguments = P2PClientArguments(kwargs, p2pclientfunction.p2pfunction.expected_return_keys)
+                p2pclientarguments.p2parguments.args_identifier = p2pclientfunction.create_arguments_identifier(kwargs)
+                if p2pclientfunction.arguments_already_submited(p2pclientarguments):
                     logger.info("Returning future that may already be precomputed")
                     return self.create_future(p2pclientfunction, p2pclientarguments.p2parguments.args_identifier)
 
@@ -514,26 +530,20 @@ class P2PClientApp(P2PFlaskApp):
                 if lru_ip is None:
                     raise ValueError("No broker found")
 
-                # TODO put all of this in a job
                 p2pclientarguments.remote_args_identifier = p2pclientfunction.create_arguments_remote_identifier(
                     p2pclientarguments.p2parguments.args_identifier,
                     lru_ip, lru_port
                 )
                 nodes = [str(lru_ip) + ":" + str(lru_port)]
 
-                serializable_document = p2pclientarguments.object2doc()
-                p2p_insert_one(self.mongod_port, p2pclientfunction.p2pfunction.db_name,
-                               p2pclientfunction.p2pfunction.db_collection, serializable_document,
-                               nodes,
-                               current_address_func=partial(self_is_reachable, self.local_port),
-                               password=self.crypt_pass, do_upload=False)
-                # here it does not upload. it only registers locally
+                p2pclientfunction.register_arguments_in_db(p2pclientarguments, nodes)
+                # TODO it seems redunant. here it does not upload. it only registers locally.
 
                 logger.info("Dispacthed function work to {},{}".format(lru_ip, lru_port))
 
                 #The reason why start remote must be a subprocess is because the uploading job might take time
                 p = multiprocessing.Process(
-                    target=partial(p2pclientfunction.start_remote, lru_ip, lru_port, p2pclientarguments, self.local_port))
+                    target=partial(p2pclientfunction.start_remote, lru_ip, lru_port, p2pclientarguments))
                 p.daemon = True
                 p.start()
                 self.jobs[frozenset(p2pclientarguments.create_generic_filter().items())] = p

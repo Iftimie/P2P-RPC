@@ -87,7 +87,7 @@ def check_brokerworker_deletion(self):
     logger = logging.getLogger(__name__)
 
     for funcname in self.registry_functions:
-        f = self.registry_functions[funcname]['original_func']
+        f = self.registry_functions[funcname].original_function
         key_interpreter, db, col = derive_vars_from_function(f)
         items = find(self.mongod_port, db, col, {})
         for item in items:
@@ -110,6 +110,16 @@ def check_brokerworker_deletion(self):
                 print("itemul vietii", itemtodel)
                 print("dupa stergere", find(self.mongod_port, db, col, search_filter))
     return
+
+from .base import P2PArguments, P2PFunction
+class P2PWorkerArguments:
+    def __init__(self):
+        pass
+
+from collections import Callable
+class P2PWorkerFunction:
+    def __init__(self, original_function: Callable, mongod_port, crypt_pass):
+        self.p2pfunction = P2PFunction(original_function, mongod_port, crypt_pass)
 
 
 class P2PClientworkerApp(P2PFlaskApp):
@@ -146,13 +156,10 @@ class P2PClientworkerApp(P2PFlaskApp):
         """
 
         def inner_decorator(f):
-            if f.__name__ in self.registry_functions:
-                raise ValueError("Function name already registered")
+            p2pworkerfunction = P2PWorkerFunction(f, self.mongod_port, self.crypt_pass)
+            self.add_to_super_register(p2pworkerfunction.p2pfunction)
+
             key_interpreter, db, col = derive_vars_from_function(f)
-
-            self.registry_functions[f.__name__]['key_interpreter'] = key_interpreter
-            self.registry_functions[f.__name__]['original_func'] = f
-
 
             updir = os.path.join(self.cache_path, db, col)  # upload directory
             os.makedirs(updir, exist_ok=True)

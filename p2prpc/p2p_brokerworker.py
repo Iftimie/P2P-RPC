@@ -171,7 +171,7 @@ def route_check_function_deletion(mongod_port, db, col, self):
 
         # there should be some mechanism so that a document is deleted only after the clientworker deleted it
         if item['started']=='terminated' and item['delete_clientworker'] is False:
-            original_func = self.registry_functions[col]['original_func']
+            original_func = self.registry_functions[col].original_function
             key_interpreter, db_name, col = derive_vars_from_function(original_func)
             mongodb = MongoClient(port=self.mongod_port)[db_name][col] # my mystake was that I did not put db_name
             # item = list(mongodb.find(filter))[0] #
@@ -189,12 +189,56 @@ def route_check_function_deletion(mongod_port, db, col, self):
     else:
         return jsonify({"status": False})
 
+from .base import P2PFunction
+from .base import P2PArguments
+
+class P2PBrokerArguments:
+    def __init__(self, expected_keys, expected_return_keys):
+        self.p2parguments = P2PArguments(expected_keys, expected_return_keys)
+        self.started = None # TODO maybe this property should also stau in p2parguments
+        self.kill_clientworker = None
+        self.delete_clientworker = None
+
+    def object2doc(self):
+        function_call_properties = self.p2parguments.object2doc()
+        function_call_properties['started'] = self.started
+        function_call_properties['kill_clientworker'] = self.kill_clientworker
+        function_call_properties['delete_clientworker'] = self.delete_clientworker
+        return function_call_properties
+
+    def doc2object(self, document):
+        self.p2parguments.doc2object(document)
+        if "started" in document:
+            self.started = document['started']
+        if "kill_clientworker" in document:
+            self.kill_clientworker = document['kill_clientworker']
+        if 'delete_clientworker' in document:
+            self.delete_clientworker = document['delete_clientworker']
 
 
-def route_execute_function(f, mongod_port, db, col, key_interpreter, can_do_locally_func, self):
+class P2PBrokerFunction:
+    def __init__(self, original_function: Callable, mongod_port, crypt_pass):
+        self.p2pfunction = P2PFunction(original_function, mongod_port, crypt_pass)
+
+    def load_arguments_from_db(self, filter_):
+        items = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
+                     self.p2pfunction.args_interpreter)
+        if len(items) == 0:
+            return None
+        p2pbrokerarguments = P2PBrokerArguments(self.p2pfunction.expected_keys, self.p2pfunction.expected_return_keys)
+        p2pbrokerarguments.doc2object(items[0])
+        return p2pbrokerarguments
+
+    def update_arguments_in_db(self, filter, keylist, p2pbrokerarguments):
+        serializable_document = p2pbrokerarguments.object2doc()
+        newvalues = {k:serializable_document[k] for k in keylist}
+        MongoClient(port=self.p2pfunction.mongod_port)[self.p2pfunction.db_name][self.p2pfunction.db_collection].update_one(
+            filter, {"$set": newvalues})
+
+def route_execute_function(p2pbrokerfunction):
     """
     Function designed to be decorated with flask.app.route
-    The function should be partially applied will all arguments
+    The function is partially applied will arguments
 
     # TODO identifier should be receives using a post request or query parameter or url parameter as in here
     #  most of the other routed functions are requesting post json
@@ -203,29 +247,25 @@ def route_execute_function(f, mongod_port, db, col, key_interpreter, can_do_loca
         identifier: string will be received when there is a http call
 
     Args from partial application of the function:
-        f: function to execute
-        db_path, db, col are part of tinymongo db
-        key_interpreter: dictionary containing keys and the expected data types
-        can_do_locally_func: function that returns True or False and says if the current function should be executed or not
-        self: P2PFlaskApp instance. this instance contains a worker pool and a list of futures #TODO maybe instead of self, only these arguments should be passed
+        p2pbrokerfunction: function to execute
     Returns:
-        flask response that will contain the dictionary as a json in header metadata and one file (which may be an archive for multiple files)
+        status code
     """
     logger = logging.getLogger(__name__)
-
     filter = loads(request.form['filter_json'])
-
-    items = find(mongod_port, db, col, filter, key_interpreter)
-    if len(items) == 0:
+    p2pbrokerarguments = p2pbrokerfunction.load_arguments_from_db(filter)
+    if p2pbrokerarguments is None:
         return make_response("Filter not found {} on broker".format(filter), 404)
 
+    p2pbrokerarguments.started='available'
+    p2pbrokerarguments.kill_clientworker = False
+    p2pbrokerarguments.delete_clientworker = False
+    p2pbrokerfunction.update_arguments_in_db(filter, ['started', 'kill_clientworker', 'delete_clientworker'], p2pbrokerarguments)
     # TODO I should probably make the item available for processing
     # In fact if there is not any key started in the dictionary, then it means that it is available for processing
     # check route_search_work
-    MongoClient(port=mongod_port)[db][col].update_one(filter, {"$set": {"started": 'available',
-                                                                        'kill_clientworker':False,
-                                                                        'delete_clientworker':False}})
-    logger.info("Updated status to available for processing: " + f.__name__)
+
+    logger.info("Updated status to available for processing: " + p2pbrokerfunction.p2pfunction.function_name)
     #I should replace the started key with some status. but i know I have to update in many other parts
     # the fact that started is a reserved word
     # I also have to modify route_search_work
@@ -239,7 +279,7 @@ def route_search_work(mongod_port, db, collection, func_name, time_limit):
     col = list(MongoClient(port=mongod_port)[db][collection].find({}))
 
 
-    col2 = filter(lambda item: item['started'] == 'available', col)
+    col2 = filter(lambda item: 'started' in item and item['started'] == 'available', col)
 
     col = list(col2)
     # TODO fix this. it returns items that have finished
@@ -286,8 +326,10 @@ def heartbeat(mongod_port, db="tms"):
 def delete_old_requests(mongod_port, registry_functions, time_limit=24, include_finished=True):
     db = MongoClient(port=mongod_port)['p2p']
     collection_names = set(db.collection_names()) - {"_default"}
+    print(collection_names)
+    print(registry_functions)
     for col_name in collection_names:
-        key_interpreter_dict = registry_functions[col_name]['key_interpreter']
+        key_interpreter_dict = registry_functions[col_name].args_interpreter
 
         col_items = list(db[col_name].find({}))
         if include_finished: # what if the upload didn't even finished ???
@@ -303,7 +345,11 @@ def delete_old_requests(mongod_port, registry_functions, time_limit=24, include_
 
 
 def route_registered_functions(registry_functions):
-    current_items = {fname: {"bytecode": db_encoder[Callable](f['original_func'])} for fname, f in registry_functions.items()}
+    current_items = {}
+    for fname, p2pfunction in registry_functions.items():
+        original_function = p2pfunction.original_function
+        value = {"bytecode": db_encoder[Callable](original_function)}
+        current_items[fname] = value
     return jsonify(current_items)
 
 
@@ -314,7 +360,6 @@ class P2PBrokerworkerApp(P2PFlaskApp):
         super(P2PBrokerworkerApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
                                                  cache_path=cache_path, password=password)
         self.roles.append("brokerworker")
-        self.registry_functions = defaultdict(dict)
         self.promises = []
 
         # FIXME this if else statement in case of debug mode was introduced just for an unfortunated combination of OS
@@ -339,14 +384,15 @@ class P2PBrokerworkerApp(P2PFlaskApp):
         """
 
         def inner_decorator(f):
-            if f.__name__ in self.registry_functions:
-                raise ValueError("Function name already registered")
-            key_interpreter, db, col = derive_vars_from_function(f)
+            p2pbrokerfunction = P2PBrokerFunction(f, self.mongod_port, self.crypt_pass)
+            self.add_to_super_register(p2pbrokerfunction.p2pfunction)
 
-            self.registry_functions[f.__name__]['key_interpreter'] = key_interpreter
-            self.registry_functions[f.__name__]['original_func'] = f
-
-            updir = os.path.join(self.cache_path, db, col)  # upload directory
+            updir = os.path.join(self.cache_path,
+                                 p2pbrokerfunction.p2pfunction.db_name,
+                                 p2pbrokerfunction.p2pfunction.db_collection)  # upload directory
+            db = p2pbrokerfunction.p2pfunction.db_name
+            col = p2pbrokerfunction.p2pfunction.db_collection
+            key_interpreter = p2pbrokerfunction.p2pfunction.args_interpreter
             os.makedirs(updir, exist_ok=True)
 
             # TODO oooooooooooooooooooooooooooooooooooooooooo
@@ -382,8 +428,7 @@ class P2PBrokerworkerApp(P2PFlaskApp):
 
             execute_function_partial = wraps(route_execute_function)(
                 partial(self.pass_req_dec(route_execute_function),
-                        f=f, mongod_port=self.mongod_port, db=db, col=col,
-                        key_interpreter=key_interpreter, can_do_locally_func=can_do_locally_func, self=self))
+                        p2pbrokerfunction=p2pbrokerfunction))
             self.route('/execute_function/{db}/{col}/{fname}'.format(db=db, col=col, fname=f.__name__),
                        methods=['POST'])(execute_function_partial)
 

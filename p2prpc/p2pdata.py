@@ -2,7 +2,7 @@ import requests
 from flask import request, jsonify, send_file, make_response
 from json import dumps, loads
 from werkzeug import secure_filename
-from .base import P2PBlueprint
+# from .base import P2PBlueprint
 from functools import partial
 import logging
 import io
@@ -245,16 +245,16 @@ def p2p_route_pull_update_one(mongod_port, db, col, serializer=serialize_doc_for
     return result
 
 
-def create_p2p_blueprint(up_dir, db_url, key_interpreter=None, current_address_func=lambda: None):
-    p2p_blueprint = P2PBlueprint("p2p_blueprint", __name__, role="storage")
-    new_deserializer = partial(deserialize_doc_from_net, up_dir=up_dir)
-    p2p_route_insert_one_func = (wraps(p2p_route_insert_one)(partial(p2p_route_insert_one, db_path=db_url, deserializer=new_deserializer, key_interpreter=key_interpreter)))
-    p2p_blueprint.route("/insert_one/<db>/<col>", methods=['POST'])(p2p_route_insert_one_func)
-    p2p_route_push_update_one_func = (wraps(p2p_route_push_update_one)(partial(p2p_route_push_update_one, db_path=db_url, deserializer=new_deserializer)))
-    p2p_blueprint.route("/push_update_one/<db>/<col>", methods=['POST'])(p2p_route_push_update_one_func)
-    p2p_route_pull_update_one_func = (wraps(p2p_route_pull_update_one)(partial(p2p_route_pull_update_one, db_path=db_url)))
-    p2p_blueprint.route("/pull_update_one/<db>/<col>", methods=['POST'])(p2p_route_pull_update_one_func)
-    return p2p_blueprint
+# def create_p2p_blueprint(up_dir, db_url, key_interpreter=None, current_address_func=lambda: None):
+#     p2p_blueprint = P2PBlueprint("p2p_blueprint", __name__, role="storage")
+#     new_deserializer = partial(deserialize_doc_from_net, up_dir=up_dir)
+#     p2p_route_insert_one_func = (wraps(p2p_route_insert_one)(partial(p2p_route_insert_one, db_path=db_url, deserializer=new_deserializer, key_interpreter=key_interpreter)))
+#     p2p_blueprint.route("/insert_one/<db>/<col>", methods=['POST'])(p2p_route_insert_one_func)
+#     p2p_route_push_update_one_func = (wraps(p2p_route_push_update_one)(partial(p2p_route_push_update_one, db_path=db_url, deserializer=new_deserializer)))
+#     p2p_blueprint.route("/push_update_one/<db>/<col>", methods=['POST'])(p2p_route_push_update_one_func)
+#     p2p_route_pull_update_one_func = (wraps(p2p_route_pull_update_one)(partial(p2p_route_pull_update_one, db_path=db_url)))
+#     p2p_blueprint.route("/pull_update_one/<db>/<col>", methods=['POST'])(p2p_route_pull_update_one_func)
+#     return p2p_blueprint
 
 
 def validate_document(document):

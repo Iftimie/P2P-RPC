@@ -116,9 +116,41 @@ def derive_vars_from_function( original_function):
     col = original_function.__name__
     return key_interpreter, db, col
 
+
+class P2PArguments:
+    def __init__(self, expected_keys, expected_return_keys):
+        """
+        Args:
+            expected_keys: list of keys that represent input arguments
+            expected_return_keys: list of keys that represent outputs
+        """
+        self.args_identifier = None
+        self.expected_keys = expected_keys[:]
+        self.expected_return_keys = expected_return_keys[:]
+        self.kwargs = {k:None for k in expected_keys}
+        self.outputs = {k:None for k in expected_return_keys}
+
+    def object2doc(self):
+        """
+        Transform the current object into a mongodb serializable dictionary (document)
+        """
+        function_call_properties = {}
+        function_call_properties.update(self.kwargs)
+        function_call_properties.update(self.outputs)
+        function_call_properties['identifier'] = self.args_identifier
+        return function_call_properties
+
+    def doc2object(self, document):
+        self.args_identifier = document['identifier']
+        for k in self.expected_keys:
+            self.kwargs[k] = document[k]
+        for k in self.expected_return_keys:
+            self.outputs[k] = document[k]
+
 class P2PFunction:
 
-    restricted_keywords = ["identifier", "remote_identifier", "nodes", "timestamp"]
+    restricted_keywords = ["identifier", "remote_identifier", "nodes", "timestamp", "started", "kill_clientworker", "delete_clientworker",
+                           'progress', 'error', 'current_address']
     restricted_values = ["value_for_key_is_file"]
 
     def __init__(self, original_function: Callable, mongod_port, crypt_pass):
@@ -126,7 +158,7 @@ class P2PFunction:
         self.function_name = original_function.__name__
         self.args_interpreter, self.db_name, self.db_collection = self.derive_vars_from_function(original_function)
         self.mongod_port = mongod_port
-        self.expected_return_keys = self.get_expected_keys(original_function)
+        self.expected_keys, self.expected_return_keys = self.get_expected_keys(original_function)
         self.crypt_pass = crypt_pass
 
     def validate_function_signature(self, original_function):
@@ -200,32 +232,12 @@ class P2PFunction:
         and a dictionary about the return (because this is required by the p2p framework)
         The combined dictionary will be stored in the database
         """
-        expected_keys = inspect.signature(original_function).return_annotation
-        expected_keys = {k: None for k in expected_keys}
-        expected_keys['progress'] = 0
-        expected_keys['error'] = ""
-        return expected_keys
+        expected_keys = list(inspect.signature(original_function).parameters.keys())
 
+        expected_return_keys = list(inspect.signature(original_function).return_annotation.keys())
+        expected_return_keys.extend(['progress', 'error'])
+        return expected_keys, expected_return_keys
 
-class P2PArguments:
-    def __init__(self, p2pfunction: P2PFunction):
-        """
-        Args:
-            p2pfunction: the function to which the current parameters belong to
-        """
-        self.__p2pfunction = p2pfunction
-        self.args_identifier = None
-        self.kwargs = None
-        self.expected_return_keys = {k:v for k, v in self.__p2pfunction.expected_return_keys.items()}
-
-    def object2doc(self):
-        """
-        Transform the current object into a mongodb serializable dictionary (document)
-        """
-        function_call_properties = {k:v for k, v in self.kwargs.items()}
-        function_call_properties['identifier'] = self.args_identifier
-        function_call_properties.update(self.expected_return_keys)
-        return function_call_properties
 
 
 class P2PBlueprint(Blueprint):
