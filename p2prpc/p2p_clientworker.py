@@ -1,4 +1,4 @@
-from .base import P2PFlaskApp, create_bookkeeper_p2pblueprint, is_debug_mode
+from .base import P2PFlaskApp, is_debug_mode
 from functools import wraps
 from functools import partial
 from .p2pdata import p2p_insert_one
@@ -8,15 +8,17 @@ import io
 import os
 from .p2p_brokerworker import function_executor, delete_old_requests
 from . import p2p_brokerworker
-from .base import derive_vars_from_function
 from .base import configure_logger
 import logging
 from .p2p_client import get_available_brokers
 import requests
 import collections
 import multiprocessing
-from collections import defaultdict
-from json import dumps
+from p2prpc.p2pdata import p2p_push_update_one
+from pymongo import MongoClient
+from .base import P2PArguments, P2PFunction
+from .registry_args import remove_values_from_doc
+from collections import Callable
 
 
 def find_response_with_work(local_port, db, collection, func_name, password):
@@ -56,75 +58,49 @@ def find_response_with_work(local_port, db, collection, func_name, password):
     return res_json, res_broker_ip, res_broker_port
 
 
-from p2prpc.p2pdata import p2p_push_update_one
-from json import dumps, loads
-def check_brokerworker_termination(jobs, mongod_port, password):
-    logger = logging.getLogger(__name__)
-
-    # TODO instead of keeping this stupid jobs dictionary, I could just store the PID in mongodb
-
-    for filteritems in list(jobs.keys()):
-        process, db, col, func_name = jobs[filteritems]
-        if not process.is_alive():
-            del jobs[filteritems]
-            continue
-        filter = {k: v for k, v in filteritems}
-        p2p_pull_update_one(mongod_port, db, col, filter, ['kill_clientworker'], deserializer=partial(deserialize_doc_from_net, up_dir=None), password=password)
-        item = find(mongod_port, db, col, filter)[0]
-        if item['kill_clientworker'] is True:
-            logger.info("Terminated function {} {}".format(func_name, filter))
-            process.terminate()
-            del jobs[filteritems]
-            search_filter = {"$or": [{"identifier": item['identifier']}, {"identifier": item['remote_identifier']}]}
-            p2p_push_update_one(mongod_port, db, col, search_filter, {"started": 'terminated', 'kill_clientworker': False}, password=password)
-            print("pushed termination")
-
-from pymongo import MongoClient
-from .p2pdata import deserialize_doc_from_db
-from .registry_args import remove_values_from_doc, db_encoder
-# aparently this function is not used
-def check_brokerworker_deletion(self):
-    logger = logging.getLogger(__name__)
-
-    for funcname in self.registry_functions:
-        p2pworkerfunction = self.registry_functions[funcname]
-
-        allp2pworkerarguments = p2pworkerfunction.list_all_arguments()
-
-
-        mongodport = p2pworkerfunction.p2pfunction.mongod_port
-        db_name = p2pworkerfunction.p2pfunction.db_name
+def check_brokerworker_termination(registry_functions):
+    for p2pworkerfunction in registry_functions:
+        new_running_jobs = []
+        db_name = p2pworkerfunction.p2pfunction.function_name
         db_collection = p2pworkerfunction.p2pfunction.db_collection
-        identifiers = list(item['identifier'] for item in MongoClient(port=mongodport)[db_name][db_collection].find({}))
+        for process, p2pworkerarguments in p2pworkerfunction.running_jobs:
+            if process.is_alive():
+                search_filter = {"$or": [{"identifier": p2pworkerarguments.p2parguments.args_identifier},
+                                         {"identifier": p2pworkerarguments.remote_args_identifier}]}
+                p2p_pull_update_one(p2pworkerfunction.p2pfunction.mongod_port, db_name, db_collection, search_filter,
+                                    ['kill_clientworker'],
+                                    deserializer=partial(deserialize_doc_from_net, up_dir=None),
+                                    password=p2pworkerfunction.p2pfunction.crypt_pass)
+                p2pworkerarguments_updated = p2pworkerfunction.load_arguments_from_db(search_filter)
 
-        p2pworkerarguments = []
-        for identifier in identifiers:
-            filter = {"identifier": identifier}
-            p2pworkerargument = p2pworkerfunction.load_arguments_from_db(filter)
-            if p2pworkerargument.started == 'available':
-                p2pworkerarguments.append(p2pworkerargument)
+                if p2pworkerarguments_updated.kill_clientworker is True:
+                    p2pworkerfunction.remove_arguments_from_db(p2pworkerarguments_updated)
+                    p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port, db_name, db_collection, search_filter,
+                                        {"started": 'terminated', 'kill_clientworker': False}, password=p2pworkerfunction.p2pfunction.crypt_pass)
+                else:
+                    new_running_jobs.append((process, p2pworkerarguments))
+        p2pworkerfunction.running_jobs = new_running_jobs
 
-        items = find(self.mongod_port, db, col, {})
-        for item in items:
-            search_filter = {"$or": [{"identifier": item['identifier']}, {"identifier": item['remote_identifier']}]}
-            p2p_pull_update_one(self.mongod_port, db, col, search_filter, ['delete_clientworker'],
-                                deserializer=partial(deserialize_doc_from_net, up_dir=None), password=self.crypt_pass)
-            itemtodel = find(self.mongod_port, db, col, search_filter)[0]
-            if itemtodel['delete_clientworker'] is True:
-                mongodb = MongoClient(port=self.mongod_port)[db][col]
-                p2p_push_update_one(self.mongod_port, db, col, search_filter, {'delete_clientworker': False}, password=self.crypt_pass)
-                document = deserialize_doc_from_db(itemtodel, key_interpreter)
-                remove_values_from_doc(document)
-                # mongodb.delete_one(search_filter) # IF I PUT ITEMTODEL IT WON'T WORK. WTFF??
-                itemtodel = find(self.mongod_port, db, col, search_filter)[0]
-                mongodb.delete_one(itemtodel)
-                ### OOOH PROBABLY BECAUSE IT IS AN OLD OBJECT, OUTDATED. BECASE i DID P2P PUSH UPDATE
-                # yep. DONT INVALIDATE OBJECTS BY CALLING FUNCTIONS THAT UPDATE THE DB AND THE OBJECT REMAINS OUTDATED
-                print("itemul vietii", itemtodel)
-                print("dupa stergere", find(self.mongod_port, db, col, search_filter))
-    return
 
-from .base import P2PArguments, P2PFunction
+def check_brokerworker_deletion(registry_functions):
+    for p2pworkerfunction in registry_functions.values():
+        db_name = p2pworkerfunction.p2pfunction.function_name
+        db_collection = p2pworkerfunction.p2pfunction.db_collection
+        for p2pworkerarguments in p2pworkerfunction.list_all_arguments():
+
+            search_filter = {"$or": [{"identifier": p2pworkerarguments.p2parguments.args_identifier},
+                                     {"identifier": p2pworkerarguments.remote_args_identifier}]}
+            p2p_pull_update_one(p2pworkerfunction.p2pfunction.mongod_port, db_name, db_collection, search_filter, ['delete_clientworker'],
+                                deserializer=partial(deserialize_doc_from_net, up_dir=None), password=p2pworkerfunction.p2pfunction.crypt_pass)
+            p2pworkerarguments_updated = p2pworkerfunction.load_arguments_from_db(search_filter)
+
+            if p2pworkerarguments_updated.delete_clientworker is True:
+                p2pworkerfunction.remove_arguments_from_db(p2pworkerarguments_updated)
+                p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port, db_name, db_collection, search_filter,
+                                    {'delete_clientworker': False},
+                                    password=p2pworkerfunction.p2pfunction.crypt_pass)
+
+
 class P2PWorkerArguments:
     def __init__(self, expected_keys, expected_return_keys):
         self.p2parguments = P2PArguments(expected_keys, expected_return_keys)
@@ -152,13 +128,13 @@ class P2PWorkerArguments:
             self.delete_clientworker = document['delete_clientworker']
 
 
-from collections import Callable
 class P2PWorkerFunction:
     def __init__(self, original_function: Callable, mongod_port, crypt_pass, cache_path):
         self.p2pfunction = P2PFunction(original_function, mongod_port, crypt_pass)
         self.updir = os.path.join(cache_path, self.p2pfunction.db_name, self.p2pfunction.db_collection)  # upload directory
         self.hint_args_file_keys = [k for k, v in inspect.signature(original_function).parameters.items() if v.annotation == io.IOBase]
         self.deserializer = partial(deserialize_doc_from_net, up_dir=self.updir, key_interpreter=self.p2pfunction.args_interpreter)
+        self.running_jobs = list()
 
     def load_arguments_from_db(self, filter_):
         items = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
@@ -180,6 +156,16 @@ class P2PWorkerFunction:
             filter = {"identifier": identifier}
             p2pworkerarguments.append(self.load_arguments_from_db(filter))
         return p2pworkerarguments
+
+    def remove_arguments_from_db(self, p2pworkerarguments):
+
+        remove_values_from_doc(p2pworkerarguments.object2doc())
+
+        filter_ = {"identifier": p2pworkerarguments.p2parguments.args_identifier,
+                   'remote_identifier': p2pworkerarguments.remote_args_identifier}
+
+        MongoClient(port=self.p2pfunction.mongod_port)[self.p2pfunction.db_name][
+            self.p2pfunction.db_collection].delete_one(filter_)
 
     def download_arguments(self, filter_, broker_ip, broker_port):
         p2pworkerarguments = P2PWorkerArguments(self.p2pfunction.expected_keys,
@@ -215,21 +201,14 @@ class P2PClientworkerApp(P2PFlaskApp):
         super(P2PClientworkerApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
                                                  cache_path=cache_path, password=password)
         self.roles.append("clientworker")
-        self.registry_functions = defaultdict(dict)
-        self.jobs = dict()
         self.register_time_regular_func(partial(delete_old_requests,
                                                          mongod_port=mongod_port,
                                                          registry_functions=self.registry_functions))
         self.register_time_regular_func(partial(check_brokerworker_termination,
-                                                         self.jobs, self.mongod_port, self.crypt_pass))
+                                                         self.registry_functions))
         self.register_time_regular_func(partial(check_brokerworker_deletion,
-                                                         self))
+                                                         self.registry_functions))
 
-    def start_local(self, newf, filter_, db, col, funcname):
-        process = multiprocessing.Process(target=newf)
-        process.daemon = True
-        process.start()
-        self.jobs[frozenset(filter_.items())] = (process, db, col, funcname)
 
     def register_p2p_func(self, can_do_work_func):
         """
@@ -247,7 +226,6 @@ class P2PClientworkerApp(P2PFlaskApp):
             db_name = p2pworkerfunction.p2pfunction.db_name
             db_collection = p2pworkerfunction.p2pfunction.db_collection
             function_name = p2pworkerfunction.p2pfunction.function_name
-            key_interpreter = p2pworkerfunction.p2pfunction.args_interpreter
             os.makedirs(p2pworkerfunction.updir, exist_ok=True)
 
             @wraps(f)
@@ -261,7 +239,7 @@ class P2PClientworkerApp(P2PFlaskApp):
                 if broker_ip is None:
                     return
 
-                filter_ = res['filter']
+                filter_ = res['filter'] # this should have format {"identifier": "xyz" "remote_identifier": "xyz"}
                 p2pworkerarguments = p2pworkerfunction.download_arguments(filter_, broker_ip, broker_port)
 
                 new_f = wraps(f)(
@@ -272,7 +250,10 @@ class P2PClientworkerApp(P2PFlaskApp):
                             #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaeger
                             logging_queue=self._logging_queue if not is_debug_mode() else None))
 
-                self.start_local(new_f, filter_, db_name, db_collection, function_name)
+                process = multiprocessing.Process(target=new_f)
+                process.daemon = True
+                process.start()
+                p2pworkerfunction.running_jobs.append((process, p2pworkerarguments))
 
             self.register_time_regular_func(wrap)
             return None

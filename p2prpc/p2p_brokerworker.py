@@ -146,12 +146,12 @@ class P2PBrokerFunction:
         MongoClient(port=self.p2pfunction.mongod_port)[self.p2pfunction.db_name][self.p2pfunction.db_collection].update_one(
             filter, {"$set": newvalues})
 
-    def remove_arguments_from_db(self, filter_):
+    def remove_arguments_from_db(self, p2pbrokerarguments):
 
-        item = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection,
-                    filter_)[0]
-        document = deserialize_doc_from_db(item, self.p2pfunction.args_interpreter)
-        remove_values_from_doc(document)
+        remove_values_from_doc(p2pbrokerarguments.object2doc())
+
+        filter_ = {"identifier": p2pbrokerarguments.p2parguments.args_identifier,
+                   'remote_identifier': p2pbrokerarguments.remote_args_identifier}
 
         MongoClient(port=self.p2pfunction.mongod_port)[self.p2pfunction.db_name][
             self.p2pfunction.db_collection].delete_one(filter_)
@@ -347,24 +347,12 @@ def heartbeat(mongod_port, db="tms"):
 
 
 def delete_old_requests(mongod_port, registry_functions, time_limit=24, include_finished=True):
-    db = MongoClient(port=mongod_port)['p2p']
-    collection_names = set(db.collection_names()) - {"_default"}
-    print(collection_names)
-    print(registry_functions)
-    for col_name in collection_names:
-        key_interpreter_dict = registry_functions[col_name].args_interpreter
-
-        col_items = list(db[col_name].find({}))
-        if include_finished: # what if the upload didn't even finished ???
-            col_items = filter(lambda item: "terminated" in item, col_items)
-        col_items = filter(lambda item: (time.time() - item['timestamp']) > time_limit * 3600, col_items)
-
-        for item in col_items:
-            print((time.time() - item['timestamp']), time_limit * 3600)
-            if (time.time() - item['timestamp']) > time_limit * 3600:
-                document = deserialize_doc_from_db(item, key_interpreter_dict)
-                remove_values_from_doc(document)
-                db[col_name].delete_one(item)
+    for p2pbrokerfunction in registry_functions.values():
+        for p2pbrokerargument in p2pbrokerfunction.list_all_arguments():
+            if p2pbrokerargument.started == 'terminated' and include_finished:
+                p2pbrokerfunction.remove_arguments_from_db(p2pbrokerargument)
+            elif time.time() - p2pbrokerargument.timestamp > time_limit * 3600:
+                p2pbrokerfunction.remove_arguments_from_db(p2pbrokerargument)
 
 
 def route_registered_functions(registry_functions):
@@ -418,16 +406,6 @@ class P2PBrokerworkerApp(P2PFlaskApp):
             function_name = p2pbrokerfunction.p2pfunction.function_name
             key_interpreter = p2pbrokerfunction.p2pfunction.args_interpreter
             os.makedirs(updir, exist_ok=True)
-
-            # TODO oooooooooooooooooooooooooooooooooooooooooo
-            #  in order to refactor the framework properly, I should shart by looking into the methods defined here
-
-            # the biggest problem here is that I optimized prematurely. biggeest mistake possible and I don't have the energy to refactor it
-            # the switches between running locally and distributing (client and brokerworker) simply complicated the program
-            # maybe I could start remaking everything and keeping only
-            #    client that only dispacthes
-            #    broker that only redirects
-            #    clientworker (should stay the same)
 
             # these functions below make more sense in p2p_data.py
             p2p_route_insert_one_func = wraps(p2p_route_insert_one)(
