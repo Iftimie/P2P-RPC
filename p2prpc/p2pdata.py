@@ -443,7 +443,6 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
 
             if res.status_code == 200:
                 try:
-                    print(res.headers.values())
                     update_json = res.headers['update_json']
                     files = {}
                     if 'Content-Disposition' in res.headers:

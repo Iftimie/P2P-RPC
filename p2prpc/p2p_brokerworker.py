@@ -357,7 +357,6 @@ def delete_old_requests(registry_functions, time_limit=24, include_finished=True
             # I removed this as the function was terminating but the client didn't had the time to download the results
             #     p2pbrokerfunction.remove_arguments_from_db(p2pbrokerargument)
             if time.time() - p2pbrokerargument.timestamp > time_limit * 3600:
-                print("Removing old requests")
                 p2pbrokerfunction.remove_arguments_from_db(p2pbrokerargument)
 
 
@@ -386,7 +385,7 @@ class P2PBrokerworkerApp(P2PFlaskApp):
                                                 time_limit=old_requests_time_limit,
                                                 include_finished=include_finished))
 
-    def register_p2p_func(self, can_do_locally_func=lambda: True, time_limit=12):
+    def register_p2p_func(self, time_limit=12):
         """
         In p2p brokerworker, this decorator will have the role of either executing a function that was registered (worker role), or store the arguments in a
          database in order to execute the function later by a clientworker (broker role).

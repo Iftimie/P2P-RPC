@@ -41,7 +41,6 @@ def select_lru_worker(local_port, func, password):
     except:
         logger.info(traceback.format_exc())
         return None, None
-
     res = list(filter(lambda d: 'node_type' in d, res))
     res1 = [item for item in res if 'worker' in item['node_type'] or 'broker' in item['node_type']]
     if len(res1) == 0:
@@ -91,7 +90,7 @@ def get_available_brokers(local_port):
 
 
 def find_required_args():
-    necessary_args = ['db', 'col', 'filter', 'mongod_port', 'password', 'key_interpreter']
+    necessary_args = ['p2pworkerfunction', 'filter_']
     actual_args = dict()
     frame_infos = inspect.stack()[:]
     for frame in frame_infos:
@@ -107,58 +106,11 @@ def p2p_progress_hook(curidx, endidx):
     actual_args = find_required_args()
     update_ = {"progress": curidx/endidx * 100}
     filter_ = actual_args['filter']
-    p2p_push_update_one(actual_args['mongod_port'], actual_args['db'], actual_args['col'], filter_, update_, password=actual_args['password'])
-
-
-def default_saving_func(filepath, item):
-    pickle.dump(item, open(filepath, 'wb'))
-
-
-def p2p_save(key, item, filesuffix=".pkl", saving_func=default_saving_func):
-    actual_args = find_required_args()
-    fp = p2p_getfilepath(suffix=filesuffix)
-    document = {key: fp}
-    saving_func(fp, item)
-    update_one(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], document, upsert=False)
-
-
-def default_loading_func(filepath):
-    pickle.load(open(filepath, 'rb'))
-
-
-def p2p_load(key, loading_func=default_loading_func):
-    actual_args = find_required_args()
-    item = find(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], actual_args['key_interpreter'])[0]
-    if key in item:
-        return loading_func(item[key])
-    else:
-        return None
-
-
-def p2p_getfilepath(suffix):
-    filepath = tempfile.mkstemp(suffix=suffix, dir=None, text=False)[1]
-    actual_args = find_required_args()
-    key = "tmpfile"
-    item = find(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], actual_args['key_interpreter'])[0]
-    count = 0
-    while key in item:
-        key += str(count)
-        count += 1
-    document = {key: filepath}
-    update_one(actual_args['mongod_port'], actual_args['db'], actual_args['col'], actual_args['filter'], document,
-               upsert=False)
-    return filepath
-
-
-def p2p_dictionary_update(update_dictionary):
-    """
-    Arbitrary dictionaries can be passed in order to update the database.
-    Some keyworks are not allowed such as identifier, timestamp, nodes etc (TODO complete the list of forbidden args)
-    """
-    assert all(key not in update_dictionary for key in ["nodes", "timestamp", "identifier", "id_", "remote_identifier"])
-    actual_args = find_required_args()
-    filter_ = {"identifier": actual_args['identifier']}
-    p2p_push_update_one(actual_args['db_url'], actual_args['db'], actual_args['col'], filter_, update_dictionary, password=actual_args['password'])
+    p2pworkerfunction = actual_args['p2pworkerfunction']
+    p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port,
+                        p2pworkerfunction.p2pfunction.db_name,
+                        p2pworkerfunction.p2pfunction.db_collection, filter_, update_,
+                        password=p2pworkerfunction.p2pfunction.crypt_pass)
 
 
 def get_remote_future(p2pclientfunction, p2pclientarguments):
@@ -432,6 +384,7 @@ class P2PClientFunction:
         logger.info("Uploading finished")
         call_remote_func(ip, port, self.p2pfunction.db_name, self.p2pfunction.db_collection, self.p2pfunction.function_name,
                          filter_, self.p2pfunction.crypt_pass)
+        logger.info("call_remote_func finished")
 
     def register_arguments_in_db(self, p2pclientarguments, nodes):
         serializable_document = p2pclientarguments.object2doc()
@@ -495,13 +448,13 @@ def wait_for_discovery(local_port):
     Try at most max_trials times to connect to p2p network or until the list of node si not empty
     """
     logger = logging.getLogger(__name__)
-    max_trials = 3
+    max_trials = 10
     count = 0
     while count < max_trials:
         res = requests.get('http://localhost:{}/node_states'.format(local_port)).json()  # will get the data defined above
         if len(res) != 0:
             break
-        logger.warning("No peers found. Waiting for nodes")
+        logger.warning("P2PClientApp: No peers found. Waiting for nodes")
         count += 1
         time.sleep(5)
 
@@ -516,7 +469,7 @@ class P2PClientApp(P2PFlaskApp):
         self.jobs = dict()
         self.background_server = None
 
-    def register_p2p_func(self, can_do_locally_func=lambda: False):
+    def register_p2p_func(self):
         """
         In p2p client, this decorator will have the role of deciding if the function should be executed remotely or
         locally. It will store the input in a collection. If the current node is reachable, then data will be updated automatically,

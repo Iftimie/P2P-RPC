@@ -44,10 +44,10 @@ def multiple_client_calls_client_worker(tmpdir, port_offset, func, file=None):
     with open(ndclient_path, "w") as f: f.write("localhost:{}\n".format(broker_port))
     with open(ndcw_path, "w") as f: f.write("localhost:{}\n".format(broker_port))
     client_app = create_p2p_client_app(ndclient_path, local_port=client_port, mongod_port=client_port+100, cache_path=cache_client_dir)
-    client_func = client_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+    client_func = client_app.register_p2p_func()(func)
 
     broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port+100, cache_path=cache_bw_dir)
-    broker_worker_app.register_p2p_func(can_do_locally_func=lambda :False)(func)
+    broker_worker_app.register_p2p_func()(func)
     broker_worker_thread = ServerThread(broker_worker_app)
     broker_worker_thread.start()
     clientworker_app = P2PClientworkerApp(ndcw_path, local_port=client_worker_port, mongod_port=client_worker_port+100, cache_path=cache_cw_dir)
@@ -96,11 +96,11 @@ def delete_old_requests(tmpdir, port_offset, func, file=None):
     with open(ndclient_path, "w") as f: f.write("localhost:{}\n".format(broker_port))
     with open(ndcw_path, "w") as f: f.write("localhost:{}\n".format(broker_port))
     client_app = create_p2p_client_app(ndclient_path, local_port=client_port, mongod_port=client_port+100, cache_path=cache_client_dir)
-    client_func = client_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+    client_func = client_app.register_p2p_func()(func)
 
     broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port+100, cache_path=cache_bw_dir,
                                            old_requests_time_limit=(1/3600) * 30)
-    broker_worker_app.register_p2p_func(can_do_locally_func=lambda :False)(func)
+    broker_worker_app.register_p2p_func()(func)
     broker_worker_thread = ServerThread(broker_worker_app, processes=10)
     broker_worker_thread.start()
     clientworker_app = P2PClientworkerApp(ndcw_path, local_port=client_worker_port, mongod_port=client_worker_port+100, cache_path=cache_cw_dir)

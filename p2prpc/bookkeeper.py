@@ -141,6 +141,7 @@ def update_function(local_port, app_roles, discovery_ips_file, password):
         logger.warning("Unable to contact localhost for getting current node states")
         logger.info(traceback.format_exc())
     except Exception as e:
+        print("raised some error hereee", str(e))
         raise e
 
     # get the current node state in LAN
@@ -168,6 +169,7 @@ def update_function(local_port, app_roles, discovery_ips_file, password):
     except ReadTimeout:
         logger.warning("Unable to contact localhost for publishing new node states")
     except Exception as e:
+        print("raised some error heree", str(e))
         raise e
 
     # publish them remotely

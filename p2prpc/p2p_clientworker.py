@@ -89,7 +89,8 @@ def check_brokerworker_deletion(registry_functions):
                                      {"identifier": p2pworkerarguments.remote_args_identifier}]}
             p2p_pull_update_one(p2pworkerfunction.p2pfunction.mongod_port, p2pworkerfunction.p2pfunction.db_name,
                                 p2pworkerfunction.p2pfunction.db_collection, search_filter, ['delete_clientworker'],
-                                deserializer=partial(deserialize_doc_from_net, up_dir=None),
+                                deserializer=partial(deserialize_doc_from_net, up_dir=None,
+                                                     key_interpreter=p2pworkerfunction.p2pfunction.args_interpreter),
                                 password=p2pworkerfunction.p2pfunction.crypt_pass)
             p2pworkerarguments_updated = p2pworkerfunction.load_arguments_from_db(search_filter)
 
