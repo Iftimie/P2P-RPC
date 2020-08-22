@@ -59,7 +59,7 @@ def find_response_with_work(local_port, db, collection, func_name, password):
 
 
 def check_brokerworker_termination(registry_functions):
-    for p2pworkerfunction in registry_functions:
+    for p2pworkerfunction in registry_functions.values():
         new_running_jobs = []
         db_name = p2pworkerfunction.p2pfunction.function_name
         db_collection = p2pworkerfunction.p2pfunction.db_collection
@@ -74,7 +74,7 @@ def check_brokerworker_termination(registry_functions):
                 p2pworkerarguments_updated = p2pworkerfunction.load_arguments_from_db(search_filter)
 
                 if p2pworkerarguments_updated.kill_clientworker is True:
-                    p2pworkerfunction.remove_arguments_from_db(p2pworkerarguments_updated)
+                    # don't delete the data here.
                     p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port, db_name, db_collection, search_filter,
                                         {"started": 'terminated', 'kill_clientworker': False}, password=p2pworkerfunction.p2pfunction.crypt_pass)
                 else:
@@ -84,21 +84,22 @@ def check_brokerworker_termination(registry_functions):
 
 def check_brokerworker_deletion(registry_functions):
     for p2pworkerfunction in registry_functions.values():
-        db_name = p2pworkerfunction.p2pfunction.function_name
-        db_collection = p2pworkerfunction.p2pfunction.db_collection
         for p2pworkerarguments in p2pworkerfunction.list_all_arguments():
-
             search_filter = {"$or": [{"identifier": p2pworkerarguments.p2parguments.args_identifier},
                                      {"identifier": p2pworkerarguments.remote_args_identifier}]}
-            p2p_pull_update_one(p2pworkerfunction.p2pfunction.mongod_port, db_name, db_collection, search_filter, ['delete_clientworker'],
-                                deserializer=partial(deserialize_doc_from_net, up_dir=None), password=p2pworkerfunction.p2pfunction.crypt_pass)
+            p2p_pull_update_one(p2pworkerfunction.p2pfunction.mongod_port, p2pworkerfunction.p2pfunction.db_name,
+                                p2pworkerfunction.p2pfunction.db_collection, search_filter, ['delete_clientworker'],
+                                deserializer=partial(deserialize_doc_from_net, up_dir=None),
+                                password=p2pworkerfunction.p2pfunction.crypt_pass)
             p2pworkerarguments_updated = p2pworkerfunction.load_arguments_from_db(search_filter)
 
             if p2pworkerarguments_updated.delete_clientworker is True:
-                p2pworkerfunction.remove_arguments_from_db(p2pworkerarguments_updated)
-                p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port, db_name, db_collection, search_filter,
+                p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port, p2pworkerfunction.p2pfunction.db_name,
+                                    p2pworkerfunction.p2pfunction.db_collection, search_filter,
                                     {'delete_clientworker': False},
                                     password=p2pworkerfunction.p2pfunction.crypt_pass)
+                p2pworkerfunction.remove_arguments_from_db(p2pworkerarguments_updated)
+
 
 
 class P2PWorkerArguments:
@@ -108,6 +109,7 @@ class P2PWorkerArguments:
         self.kill_clientworker = None
         self.delete_clientworker = None
         self.remote_args_identifier = None #TODO. this item appears in all 3 classes. refactor
+        self.timestamp = None
 
     def object2doc(self):
         function_call_properties = self.p2parguments.object2doc()
@@ -115,6 +117,7 @@ class P2PWorkerArguments:
         function_call_properties['started'] = self.started
         function_call_properties['kill_clientworker'] = self.kill_clientworker
         function_call_properties['delete_clientworker'] = self.delete_clientworker
+        function_call_properties['timestamp'] = self.delete_clientworker
         return function_call_properties
 
     def doc2object(self, document):
@@ -126,6 +129,8 @@ class P2PWorkerArguments:
             self.kill_clientworker = document['kill_clientworker']
         if 'delete_clientworker' in document:
             self.delete_clientworker = document['delete_clientworker']
+        if 'timestamp' in document:
+            self.timestamp = document['timestamp']
 
 
 class P2PWorkerFunction:
@@ -135,6 +140,10 @@ class P2PWorkerFunction:
         self.hint_args_file_keys = [k for k, v in inspect.signature(original_function).parameters.items() if v.annotation == io.IOBase]
         self.deserializer = partial(deserialize_doc_from_net, up_dir=self.updir, key_interpreter=self.p2pfunction.args_interpreter)
         self.running_jobs = list()
+
+    @property
+    def function_name(self):
+        return self.p2pfunction.function_name
 
     def load_arguments_from_db(self, filter_):
         items = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
@@ -202,7 +211,6 @@ class P2PClientworkerApp(P2PFlaskApp):
                                                  cache_path=cache_path, password=password)
         self.roles.append("clientworker")
         self.register_time_regular_func(partial(delete_old_requests,
-                                                         mongod_port=mongod_port,
                                                          registry_functions=self.registry_functions))
         self.register_time_regular_func(partial(check_brokerworker_termination,
                                                          self.registry_functions))
@@ -221,7 +229,7 @@ class P2PClientworkerApp(P2PFlaskApp):
 
         def inner_decorator(f):
             p2pworkerfunction = P2PWorkerFunction(f, self.mongod_port, self.crypt_pass, self.cache_path)
-            self.add_to_super_register(p2pworkerfunction.p2pfunction)
+            self.add_to_super_register(p2pworkerfunction)
 
             db_name = p2pworkerfunction.p2pfunction.db_name
             db_collection = p2pworkerfunction.p2pfunction.db_collection

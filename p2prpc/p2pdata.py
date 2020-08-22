@@ -218,7 +218,7 @@ def p2p_route_pull_update_one(mongod_port, db, col, serializer=serialize_doc_for
     hint_file_keys = loads(request.form['hint_file_keys_json'])
     required_list = list(MongoClient(port=mongod_port)[db][col].find(filter_data))
     if not required_list:
-        return make_response("filter" + str(filter_data) + "resulted in empty collection")
+        return make_response("filter" + str(filter_data) + "resulted in empty collection", 404)
     # TODO there is a case when filter from client contains both local and remote identifiers, and also both identifiers can be seen here
     #  as 2 different items in collections because both were inserted at different times. In this case error should be returned and the user
     #  should resubmit the work with different arguments (thus different hash)
@@ -428,7 +428,6 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
 
     nodes = collection_res[0]["nodes"]
 
-    files_to_remove_after_download = []
     merging_data = []
 
     for i, node in enumerate(nodes):
@@ -444,6 +443,7 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
 
             if res.status_code == 200:
                 try:
+                    print(res.headers.values())
                     update_json = res.headers['update_json']
                     files = {}
                     if 'Content-Disposition' in res.headers:
@@ -456,11 +456,12 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
                     raise ValueError("update_json unavailable")
             else:
                 logger.info(res.content)
+                raise ValueError(res.content.decode())
         except ValueError as e:
             traceback.print_exc()
             logger.info(traceback.format_exc())
             logger.info("Unable to post p2p data")
-            if str(e)=="update_json unavailable":
+            if str(e)=="update_json unavailable" or "empty collection" in str(e):
                 raise e
 
 

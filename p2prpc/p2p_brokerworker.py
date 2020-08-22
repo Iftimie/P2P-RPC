@@ -119,6 +119,10 @@ class P2PBrokerFunction:
     def __init__(self, original_function: Callable, mongod_port, crypt_pass):
         self.p2pfunction = P2PFunction(original_function, mongod_port, crypt_pass)
 
+    @property
+    def function_name(self):
+        return self.p2pfunction.function_name
+
     def load_arguments_from_db(self, filter_):
         items = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
                      self.p2pfunction.args_interpreter)
@@ -346,19 +350,21 @@ def heartbeat(mongod_port, db="tms"):
     return make_response("Thank god you are alive", 200)
 
 
-def delete_old_requests(mongod_port, registry_functions, time_limit=24, include_finished=True):
+def delete_old_requests(registry_functions, time_limit=24, include_finished=True):
     for p2pbrokerfunction in registry_functions.values():
         for p2pbrokerargument in p2pbrokerfunction.list_all_arguments():
-            if p2pbrokerargument.started == 'terminated' and include_finished:
-                p2pbrokerfunction.remove_arguments_from_db(p2pbrokerargument)
-            elif time.time() - p2pbrokerargument.timestamp > time_limit * 3600:
+            # if p2pbrokerargument.started == 'terminated' and include_finished:
+            # I removed this as the function was terminating but the client didn't had the time to download the results
+            #     p2pbrokerfunction.remove_arguments_from_db(p2pbrokerargument)
+            if time.time() - p2pbrokerargument.timestamp > time_limit * 3600:
+                print("Removing old requests")
                 p2pbrokerfunction.remove_arguments_from_db(p2pbrokerargument)
 
 
 def route_registered_functions(registry_functions):
     current_items = {}
-    for fname, p2pfunction in registry_functions.items():
-        original_function = p2pfunction.original_function
+    for fname, p2pbrokerfunction in registry_functions.items():
+        original_function = p2pbrokerfunction.p2pfunction.original_function
         value = {"bytecode": db_encoder[Callable](original_function)}
         current_items[fname] = value
     return jsonify(current_items)
@@ -376,7 +382,6 @@ class P2PBrokerworkerApp(P2PFlaskApp):
         # FIXME this if else statement in case of debug mode was introduced just for an unfortunated combination of OS
         #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaegr
         self.register_time_regular_func(partial(delete_old_requests,
-                                                mongod_port=mongod_port,
                                                 registry_functions=self.registry_functions,
                                                 time_limit=old_requests_time_limit,
                                                 include_finished=include_finished))
@@ -396,7 +401,7 @@ class P2PBrokerworkerApp(P2PFlaskApp):
 
         def inner_decorator(f):
             p2pbrokerfunction = P2PBrokerFunction(f, self.mongod_port, self.crypt_pass)
-            self.add_to_super_register(p2pbrokerfunction.p2pfunction)
+            self.add_to_super_register(p2pbrokerfunction)
 
             updir = os.path.join(self.cache_path,
                                  p2pbrokerfunction.p2pfunction.db_name,
