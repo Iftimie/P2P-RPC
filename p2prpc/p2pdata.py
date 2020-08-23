@@ -459,8 +459,7 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
         except ValueError as e:
             logger.info("Unable to post p2p data")
             if str(e)=="update_json unavailable" or "empty collection" in str(e):
-                logger.info(traceback.format_exc())
-                raise e
+                logger.info(str(e))
 
 
     update = merging_func(collection_res[0], merging_data)

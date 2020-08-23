@@ -619,10 +619,6 @@ def configure_logger(name, module_level_list=None, default_level='WARNING'):
                 'level': default_level,
                 'handlers': ['console_'+default_level, 'info_file_handler', 'error_file_handler', 'wsgi', 'werkzeug']
             },
-            'root': {
-                'level': default_level,
-                'handlers': ['console_'+default_level, 'info_file_handler', 'error_file_handler', 'wsgi', 'werkzeug']
-            },
         },
     }
     # I do this like that because I want in console to ignore INFO messages from flask (root is WARNING)

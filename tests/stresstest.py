@@ -82,6 +82,11 @@ def multiple_client_calls_client_worker(tmpdir, port_offset, func, file=None):
 
 
 def delete_old_requests(tmpdir, port_offset, func, file=None):
+    """
+    In this situation. It is ok for check_brokerworker_deletion or check_brokerworker_termination
+    to show error messages that originate from the broker. What happens is that on the broker side, the
+    arguments expired and were deleted. And the worker is trying to pull arguments that no longer exist.
+    """
     if file is None:
         file = __file__
     client_port = 5000 + port_offset
@@ -99,7 +104,7 @@ def delete_old_requests(tmpdir, port_offset, func, file=None):
     client_func = client_app.register_p2p_func()(func)
 
     broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port+100, cache_path=cache_bw_dir,
-                                           old_requests_time_limit=(1/3600) * 30)
+                                           old_requests_time_limit=(1/3600) * 40)
     broker_worker_app.register_p2p_func()(func)
     broker_worker_thread = ServerThread(broker_worker_app, processes=10)
     broker_worker_thread.start()
@@ -107,10 +112,10 @@ def delete_old_requests(tmpdir, port_offset, func, file=None):
     clientworker_app.register_p2p_func(can_do_work_func=lambda :True)(func)
     clientworker_thread = ServerThread(clientworker_app)
     clientworker_thread.start()
-    while select_lru_worker(client_port, func, client_app.crypt_pass) == (None, None):
+    while select_lru_worker(client_app.registry_functions[func.__name__]) == (None, None):
         time.sleep(3)
         print("Waiting for client to know about broker")
-    while select_lru_worker(client_worker_port, func, client_app.crypt_pass) == (None, None):
+    while select_lru_worker(clientworker_app.registry_functions[func.__name__].p2pfunction) == (None, None):
         time.sleep(3)
         print("Waiting for clientworker to know about broker")
 
@@ -129,8 +134,7 @@ def delete_old_requests(tmpdir, port_offset, func, file=None):
     while True:
         col = list(MongoClient(port=broker_port+100)["p2p"][func.__name__].find({}))
         if len(col) != 0:
-            print("Waiting to delete the following items")
-            pprint.pprint(col)
+            print("Waiting to delete the following items", col)
             time.sleep(3)
         else:
             break
@@ -455,7 +459,7 @@ def function_delete_on_clientworker(tmpdir, port_offset, func):
 
 if __name__ == "__main__":
     if len(sys.argv) == 1:
-        testnum = 0
+        testnum = 2
     else:
         testnum = int(sys.argv[1])
 

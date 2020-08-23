@@ -65,21 +65,6 @@ def check_brokerworker_termination(registry_functions):
             if process.is_alive():
                 search_filter = {"$or": [{"identifier": p2pworkerarguments.p2parguments.args_identifier},
                                          {"identifier": p2pworkerarguments.remote_args_identifier}]}
-                # l = p2pworkerfunction.list_all_arguments()
-                # # print("this 1",[li.object2doc() for li in l])
-                # # identifiers = list(
-                # #     item['identifier'] for item in MongoClient(port=p2pworkerfunction.p2pfunction.mongod_port)[db_name][db_collection].find({}))
-                # # print("this 2",identifiers)
-                # # print("this 3", list(
-                # #     item['identifier'] for item in
-                # #     MongoClient(port=p2pworkerfunction.p2pfunction.mongod_port)[db_name][db_collection].find(
-                # #         search_filter)))
-                # # print("this 4", list(
-                # #     item['identifier'] for item in
-                # #     MongoClient(port=p2pworkerfunction.p2pfunction.mongod_port)[db_name][db_collection].find(
-                # #         {"identifier": p2pworkerarguments.p2parguments.args_identifier,
-                # #          "remote_identifier": p2pworkerarguments.remote_args_identifier}
-                # #     )))
 
                 p2p_pull_update_one(p2pworkerfunction.p2pfunction.mongod_port, db_name, db_collection, search_filter,
                                     ['kill_clientworker'],
@@ -97,6 +82,7 @@ def check_brokerworker_termination(registry_functions):
 
 
 def check_brokerworker_deletion(registry_functions):
+
     for p2pworkerfunction in registry_functions.values():
         for p2pworkerarguments in p2pworkerfunction.list_all_arguments():
             search_filter = {"$or": [{"identifier": p2pworkerarguments.p2parguments.args_identifier},

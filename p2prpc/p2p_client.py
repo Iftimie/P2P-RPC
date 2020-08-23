@@ -109,7 +109,7 @@ def get_remote_future(p2pclientfunction, p2pclientarguments):
     fsf = frozenset(filter_.items())
     while fsf in p2pclientfunction.running_jobs and p2pclientfunction.running_jobs[fsf][0].is_alive():
         time.sleep(4)
-        logger.info("Waiting for uploading job to finish")
+        logger.info(f"Waiting for uploading job to finish. filter is {filter_}")
         # what if due to expiration on broker, the upload didn't even finish??
         # even if the item is expired on broker. the upload part is guaranteed to finish. as long as user does not
         # terminate upload
@@ -142,6 +142,7 @@ class Future:
         while any(self.p2pclientarguments.p2parguments.outputs[k] is None
                   for k in self.p2pclientfunction.p2pfunction.expected_return_keys
                   if k != 'error'):
+            logger.info("Not done yet " + str(self.p2pclientarguments.p2parguments.args_identifier))
             self.p2pclientarguments = get_remote_future(self.p2pclientfunction, self.p2pclientarguments)
             if 'error' in self.p2pclientarguments.p2parguments.outputs and \
                     self.p2pclientarguments.p2parguments.outputs['error'] != None:
@@ -151,8 +152,7 @@ class Future:
             count_time += wait_time
             if count_time > timeout:
                 raise TimeoutError("Waiting time exceeded")
-        logger.info("Not done yet " + str(self.p2pclientarguments.object2doc()))
-
+        logger.info(f"{self.p2pclientarguments.p2parguments.args_identifier} finished")
         return self.p2pclientarguments.p2parguments.outputs
 
     def terminate(self):
