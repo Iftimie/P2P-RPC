@@ -10,8 +10,7 @@ from .p2p_brokerworker import function_executor, delete_old_requests
 from . import p2p_brokerworker
 from .base import configure_logger
 import logging
-from .p2p_client import get_available_brokers
-import requests
+from .globals import requests
 import collections
 import multiprocessing
 from p2prpc.p2pdata import p2p_push_update_one
@@ -19,25 +18,24 @@ from pymongo import MongoClient
 from .base import P2PArguments, P2PFunction
 from .registry_args import remove_values_from_doc
 from collections import Callable
+import traceback
+from .bookkeeper import query_node_states
 
 
-def find_response_with_work(local_port, db, collection, func_name, password):
+def find_response_with_work(mongod_port, db, collection, func_name, password):
     logger = logging.getLogger(__name__)
 
     res_broker_ip = None
     res_broker_port = None
     res_json = dict()
 
-    brokers = get_available_brokers(local_port=local_port)
-
-    if not brokers:
-        logger.info("No broker found")
+    brokers = query_node_states(mongod_port)
 
     for broker in brokers:
         broker_address = broker['address']
         try:
             url = 'http://{}/search_work/{}/{}/{}'.format(broker_address, db, collection, func_name)
-            res = requests.post(url, timeout=120, headers={"Authorization": password})
+            res = requests.post(url, headers={"Authorization": password})
             if isinstance(res.json, collections.Callable):
                 returned_json = res.json()  # from requests lib
             else: # is property
@@ -61,15 +59,31 @@ def find_response_with_work(local_port, db, collection, func_name, password):
 def check_brokerworker_termination(registry_functions):
     for p2pworkerfunction in registry_functions.values():
         new_running_jobs = []
-        db_name = p2pworkerfunction.p2pfunction.function_name
+        db_name = p2pworkerfunction.p2pfunction.db_name
         db_collection = p2pworkerfunction.p2pfunction.db_collection
         for process, p2pworkerarguments in p2pworkerfunction.running_jobs:
             if process.is_alive():
                 search_filter = {"$or": [{"identifier": p2pworkerarguments.p2parguments.args_identifier},
                                          {"identifier": p2pworkerarguments.remote_args_identifier}]}
+                # l = p2pworkerfunction.list_all_arguments()
+                # # print("this 1",[li.object2doc() for li in l])
+                # # identifiers = list(
+                # #     item['identifier'] for item in MongoClient(port=p2pworkerfunction.p2pfunction.mongod_port)[db_name][db_collection].find({}))
+                # # print("this 2",identifiers)
+                # # print("this 3", list(
+                # #     item['identifier'] for item in
+                # #     MongoClient(port=p2pworkerfunction.p2pfunction.mongod_port)[db_name][db_collection].find(
+                # #         search_filter)))
+                # # print("this 4", list(
+                # #     item['identifier'] for item in
+                # #     MongoClient(port=p2pworkerfunction.p2pfunction.mongod_port)[db_name][db_collection].find(
+                # #         {"identifier": p2pworkerarguments.p2parguments.args_identifier,
+                # #          "remote_identifier": p2pworkerarguments.remote_args_identifier}
+                # #     )))
+
                 p2p_pull_update_one(p2pworkerfunction.p2pfunction.mongod_port, db_name, db_collection, search_filter,
                                     ['kill_clientworker'],
-                                    deserializer=partial(deserialize_doc_from_net, up_dir=None),
+                                    deserializer=partial(deserialize_doc_from_net, up_dir=None, key_interpreter=p2pworkerfunction.p2pfunction.args_interpreter),
                                     password=p2pworkerfunction.p2pfunction.crypt_pass)
                 p2pworkerarguments_updated = p2pworkerfunction.load_arguments_from_db(search_filter)
 
@@ -202,7 +216,7 @@ class P2PWorkerFunction:
         p2pworkerarguments.doc2object(items[0])
         return p2pworkerarguments
 
-
+from .bookkeeper import update_function, initial_discovery
 class P2PClientworkerApp(P2PFlaskApp):
 
     def __init__(self, discovery_ips_file, cache_path, local_port=5002, mongod_port=5102, password=""):
@@ -211,13 +225,14 @@ class P2PClientworkerApp(P2PFlaskApp):
         super(P2PClientworkerApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
                                                  cache_path=cache_path, password=password)
         self.roles.append("clientworker")
+        self._initial_funcs.append(partial(initial_discovery, mongod_port, None, None, discovery_ips_file, None))
         self.register_time_regular_func(partial(delete_old_requests,
                                                          registry_functions=self.registry_functions))
         self.register_time_regular_func(partial(check_brokerworker_termination,
                                                          self.registry_functions))
         self.register_time_regular_func(partial(check_brokerworker_deletion,
                                                          self.registry_functions))
-
+        self.register_time_regular_func(partial(update_function, mongod_port))
 
     def register_p2p_func(self, can_do_work_func):
         """
@@ -243,7 +258,7 @@ class P2PClientworkerApp(P2PFlaskApp):
                     return
                 logger = logging.getLogger(__name__)
                 logger.info("Searching for work")
-                res, broker_ip, broker_port = find_response_with_work(self.local_port, db_name, db_collection, function_name,
+                res, broker_ip, broker_port = find_response_with_work(self.mongod_port, db_name, db_collection, function_name,
                                                                       self.crypt_pass)
                 if broker_ip is None:
                     return

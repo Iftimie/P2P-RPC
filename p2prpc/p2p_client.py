@@ -1,4 +1,5 @@
-from .base import P2PFlaskApp, P2PFunction, P2PArguments, create_bookkeeper_p2pblueprint, is_debug_mode
+from .base import P2PFlaskApp, P2PFunction, P2PArguments, is_debug_mode
+from .bookkeeper import query_node_states
 from functools import wraps
 from functools import partial
 from .p2pdata import p2p_push_update_one, p2p_insert_one
@@ -12,7 +13,7 @@ from .base import wait_until_online
 import time
 import threading
 import inspect
-import requests
+from .globals import requests
 from .registry_args import hash_kwargs, db_encoder
 from .p2p_brokerworker import check_remote_identifier, check_function_termination, check_function_deletion
 from .p2pdata import find
@@ -25,68 +26,48 @@ from p2prpc.p2pdata import update_one
 import tempfile
 import pickle
 from .registry_args import kicomp
+from collections import deque
 from pymongo import MongoClient
 from p2prpc.registry_args import deserialize_doc_from_db, remove_values_from_doc
 import dis
 
 
-def select_lru_worker(local_port, func, password):
+def select_lru_worker(p2pfunction):
     """
     Selects the least recently used worker from the known states and returns its IP and PORT
     """
-    func_bytecode = db_encoder[Callable](func)
+    func_bytecode = db_encoder[Callable](p2pfunction.original_function)
+    crypt_pass = p2pfunction.crypt_pass
+    funcname = p2pfunction.function_name
     logger = logging.getLogger(__name__)
-    try:
-        res = requests.get('http://localhost:{}/node_states'.format(local_port), timeout=120).json()  # will get the data defined above
-    except:
-        logger.info(traceback.format_exc())
-        return None, None
-    res = list(filter(lambda d: 'node_type' in d, res))
-    res1 = [item for item in res if 'worker' in item['node_type'] or 'broker' in item['node_type']]
-    if len(res1) == 0:
-        logger.info("No worker or broker available")
-        return None, None
-    res1 = sorted(res1, key=lambda x: x['workload'])
-    while res1:
-        try:
-            addr = res1[0]['address']
-            response = requests.get('http://{}/echo'.format(addr), headers={'Authorization': password})
-            if response.status_code != 200:
-                raise ValueError
-            worker_functions = requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': password}).json()
 
-            if func.__name__ not in worker_functions or worker_functions[func.__name__]["bytecode"] != func_bytecode:
-                raise ValueError(f"Function {func.__name__} in worker {addr} has different bytecode compared to local function")
+    res = query_node_states(p2pfunction.mongod_port)
+
+    if len(res) == 0:
+        logger.info("No broker available")
+        return None, None
+    while res:
+        try:
+            addr = res[0]['address']
+            # response = requests.get('http://{}/echo'.format(addr), headers={'Authorization': crypt_pass})
+            # if response.status_code != 200:
+            #     raise ValueError
+            worker_functions = requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': crypt_pass}).json()
+
+            if funcname not in worker_functions or worker_functions[funcname]["bytecode"] != func_bytecode:
+                raise ValueError(f"Function {funcname} in worker {addr} has different bytecode compared to local function")
             break
         except:
-            logger.info("worker unavailable {}".format(res1[0]['address']))
-            res1.pop(0)
+            logger.info("worker unavailable {}".format(res[0]['address']))
+            res.popleft()
 
-    if len(res1) == 0:
+    if len(res) == 0:
         logger.info("No worker or broker available")
         return None, None
-    return res1[0]['address'].split(":")
+    return res[0]['address'].split(":")
 
 
-def get_available_brokers(local_port):
-    logger = logging.getLogger(__name__)
-    res1 = []
-    try:
-        res1 = requests.get('http://localhost:{}/node_states'.format(local_port)).json()  # will get the data defined above
-        res1 = [item for item in res1 if 'broker' in item['node_type']]
-        if len(res1) == 0:
-            logger.info("No broker available")
-            return res1
-        res1 = sorted(res1, key=lambda x: x['workload'])
-    except:
-        logger.info(traceback.format_exc())
 
-    # workload for client
-    #   client will send file to brokers with workers waiting
-    # workload for worker
-    #   worker will fetch from brokers with most work to do (i.e. workload 0)
-    # a client will not be able to update the the workload of a broker!!!!!
-    return res1
 
 
 def find_required_args():
@@ -443,22 +424,7 @@ class ServerThread(threading.Thread):
         self.srv.shutdown()
 
 
-def wait_for_discovery(local_port):
-    """
-    Try at most max_trials times to connect to p2p network or until the list of node si not empty
-    """
-    logger = logging.getLogger(__name__)
-    max_trials = 10
-    count = 0
-    while count < max_trials:
-        res = requests.get('http://localhost:{}/node_states'.format(local_port)).json()  # will get the data defined above
-        if len(res) != 0:
-            break
-        logger.warning("P2PClientApp: No peers found. Waiting for nodes")
-        count += 1
-        time.sleep(5)
-
-
+from .bookkeeper import update_function, initial_discovery
 class P2PClientApp(P2PFlaskApp):
 
     def __init__(self, discovery_ips_file, cache_path, local_port=5000, mongod_port=5100, password=""):
@@ -468,6 +434,8 @@ class P2PClientApp(P2PFlaskApp):
         self.roles.append("client")
         self.jobs = dict()
         self.background_server = None
+        self._initial_funcs.append(partial(initial_discovery, mongod_port, None, None, discovery_ips_file, None))
+        self.register_time_regular_func(partial(update_function, mongod_port))
 
     def register_p2p_func(self):
         """
@@ -499,7 +467,7 @@ class P2PClientApp(P2PFlaskApp):
                     logger.info("Returning future that may already be precomputed")
                     return Future(p2pclientfunction, p2pclientarguments)
 
-                lru_ip, lru_port = select_lru_worker(self.local_port, f, self.crypt_pass)
+                lru_ip, lru_port = select_lru_worker(p2pclientfunction.p2pfunction)
                 if lru_ip is None:
                     raise ValueError("No broker found")
 
@@ -537,5 +505,4 @@ def create_p2p_client_app(discovery_ips_file, cache_path, local_port=5000, mongo
     p2p_client_app.background_server = ServerThread(p2p_client_app, processes=processes)
     p2p_client_app.background_server.start()
     wait_until_online(p2p_client_app.local_port, p2p_client_app.crypt_pass)
-    wait_for_discovery(p2p_client_app.local_port)
     return p2p_client_app

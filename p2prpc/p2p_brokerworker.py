@@ -1,4 +1,4 @@
-import requests
+from .globals import requests
 from .base import P2PFlaskApp, is_debug_mode
 from flask import make_response, jsonify
 from .base import derive_vars_from_function
@@ -9,6 +9,7 @@ from .p2pdata import p2p_route_insert_one, deserialize_doc_from_net, p2p_route_p
     p2p_route_push_update_one
 from .p2pdata import find, p2p_push_update_one
 from pymongo import MongoClient
+import pymongo
 import inspect
 import logging
 from json import dumps, loads
@@ -21,6 +22,7 @@ from multiprocessing import Process
 import traceback
 from collections import Callable
 import psutil
+from typing import List
 
 
 def call_remote_func(ip, port, db, col, func_name, filter, password):
@@ -133,10 +135,16 @@ class P2PBrokerFunction:
         return p2pbrokerarguments
 
     def list_all_arguments(self):
+        logger = logging.getLogger(__name__)
+
         mongodport = self.p2pfunction.mongod_port
         db_name = self.p2pfunction.db_name
         db_collection = self.p2pfunction.db_collection
-        identifiers = list(item['identifier'] for item in MongoClient(port=mongodport)[db_name][db_collection].find({}))
+        try:
+            identifiers = list(item['identifier'] for item in MongoClient(port=mongodport)[db_name][db_collection].find({}))
+        except pymongo.errors.AutoReconnect:
+            logger.info("Unable to connect to mongo")
+            identifiers = []
 
         p2pbrokerarguments = []
         for identifier in identifiers:
@@ -369,6 +377,32 @@ def route_registered_functions(registry_functions):
     return jsonify(current_items)
 
 
+from .base import P2PBlueprint
+from .bookkeeper import route_node_states
+def create_bookkeeper_p2pblueprint(mongod_port) -> P2PBlueprint:
+    """
+    Creates the bookkeeper blueprint
+
+    Args:
+        local_port: integer
+        app_roles:
+        discovery_ips_file: path to file with initial configuration of the network. The file should contain a list with
+            reachable addresses
+
+    Return:
+        P2PBluePrint
+    """
+    bookkeeper_bp = P2PBlueprint("bookkeeper_bp", __name__, role="bookkeeper")
+    decorated_route_node_states = (wraps(route_node_states)(partial(route_node_states, mongod_port)))
+    bookkeeper_bp.route("/node_states", methods=['POST', 'GET'])(decorated_route_node_states)
+
+    time_regular_func = partial(update_function, mongod_port)
+    bookkeeper_bp.register_time_regular_func(time_regular_func)
+
+    return bookkeeper_bp
+
+
+from .bookkeeper import initial_discovery, update_function
 class P2PBrokerworkerApp(P2PFlaskApp):
 
     def __init__(self, discovery_ips_file, cache_path, local_port=5001, mongod_port=5101, password="", old_requests_time_limit=23, include_finished=True):
@@ -380,10 +414,13 @@ class P2PBrokerworkerApp(P2PFlaskApp):
 
         # FIXME this if else statement in case of debug mode was introduced just for an unfortunated combination of OS
         #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaegr
+        self._initial_funcs.append(partial(initial_discovery, mongod_port, local_port, self.roles, discovery_ips_file, self.crypt_pass, isbroker=True))
         self.register_time_regular_func(partial(delete_old_requests,
                                                 registry_functions=self.registry_functions,
                                                 time_limit=old_requests_time_limit,
                                                 include_finished=include_finished))
+        bookkeeper_bp = create_bookkeeper_p2pblueprint(mongod_port=self.mongod_port)
+        self.register_blueprint(bookkeeper_bp)
 
     def register_p2p_func(self, time_limit=12):
         """

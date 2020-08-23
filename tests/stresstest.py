@@ -54,10 +54,10 @@ def multiple_client_calls_client_worker(tmpdir, port_offset, func, file=None):
     clientworker_app.register_p2p_func(can_do_work_func=lambda :True)(func)
     clientworker_thread = ServerThread(clientworker_app)
     clientworker_thread.start()
-    while select_lru_worker(client_port, func, client_app.crypt_pass) == (None, None):
+    while select_lru_worker(client_app.registry_functions[func.__name__]) == (None, None):
         time.sleep(3)
         print("Waiting for client to know about broker")
-    while select_lru_worker(client_worker_port, func, client_app.crypt_pass) == (None, None):
+    while select_lru_worker(clientworker_app.registry_functions[func.__name__].p2pfunction) == (None, None):
         time.sleep(3)
         print("Waiting for clientworker to know about broker")
 

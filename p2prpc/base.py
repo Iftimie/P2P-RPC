@@ -1,5 +1,4 @@
 from logging.config import dictConfig
-from typing import List
 from flask import Flask, Blueprint, make_response, request
 import time
 import threading
@@ -285,29 +284,6 @@ class P2PBlueprint(Blueprint):
         return decorated_function_catcher
 
 
-def create_bookkeeper_p2pblueprint(local_port: int, app_roles: List[str], discovery_ips_file: str, mongod_port, password: str) -> P2PBlueprint:
-    """
-    Creates the bookkeeper blueprint
-
-    Args:
-        local_port: integer
-        app_roles:
-        discovery_ips_file: path to file with initial configuration of the network. The file should contain a list with
-            reachable addresses
-
-    Return:
-        P2PBluePrint
-    """
-    bookkeeper_bp = P2PBlueprint("bookkeeper_bp", __name__, role="bookkeeper")
-    decorated_route_node_states = (wraps(route_node_states)(partial(route_node_states, mongod_port)))
-    bookkeeper_bp.route("/node_states", methods=['POST', 'GET'])(decorated_route_node_states)
-
-    time_regular_func = partial(update_function, local_port, app_roles, discovery_ips_file, password)
-    bookkeeper_bp.register_time_regular_func(time_regular_func)
-
-    return bookkeeper_bp
-
-
 def wait_for_mongo_online(mongod_port):
     while True:
         try:
@@ -361,6 +337,7 @@ class P2PFlaskApp(Flask):
         self.roles = []
         self._blueprints = {}
         self._time_regular_funcs = []
+        self._initial_funcs = []
         # FIXME this if else statement in case of debug mode was introduced just for an unfortunated combination of OS
         #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaegr
         if is_debug_mode():
@@ -391,12 +368,6 @@ class P2PFlaskApp(Flask):
 
         self.route("/echo", methods=['GET'])(self.pass_req_dec(echo))
 
-        bookkeeper_bp = create_bookkeeper_p2pblueprint(local_port=self.local_port,
-                                                       app_roles=self.roles,
-                                                       discovery_ips_file=self.discovery_ips_file, mongod_port=self.mongod_port,
-                                                       password=self.crypt_pass)
-        self.register_blueprint(bookkeeper_bp)
-
     def add_to_super_register(self, p2pfunction: P2PFunction):
         if p2pfunction.function_name in self.registry_functions:
             raise ValueError(f"Function {p2pfunction.__name__} already registered")
@@ -426,6 +397,9 @@ class P2PFlaskApp(Flask):
 
     # TODO I should also implement the shutdown method that will close the time_regular_thread
 
+    def _run_init_funcs(self):
+        for f in self._initial_funcs:
+            f()
 
     def _time_regular(self, list_funcs, time_interval, local_port, stop_thread, password):
         # while the app is not alive it
@@ -480,6 +454,7 @@ class P2PFlaskApp(Flask):
         self.mongod_process = subprocess.Popen(["mongod", "--dbpath", self.cache_path, "--port", str(self.mongod_port),
                                                  "--logpath", os.path.join(self.cache_path, "mongodlog.log")])
         wait_for_mongo_online(self.mongod_port)
+        self._run_init_funcs()
         # TODO also kill this process
         self._logger_thread = threading.Thread(target=P2PFlaskApp._dispatch_log_records,
                                                args=(

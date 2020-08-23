@@ -1,4 +1,4 @@
-import requests
+from .globals import requests
 from flask import request, jsonify, send_file, make_response
 from json import dumps, loads
 from werkzeug import secure_filename
@@ -439,7 +439,7 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
         try:
             data_to_send = {"req_keys_json": req_keys_json, "filter_json": filter_json, "hint_file_keys_json": hint_file_keys_json}
             url = "http://{}/pull_update_one/{}/{}".format(node, db, col)
-            res = requests.post(url, files={}, data=data_to_send, headers={"Authorization": password}, timeout=120)
+            res = requests.post(url, files={}, data=data_to_send, headers={"Authorization": password})
 
             if res.status_code == 200:
                 try:
@@ -457,10 +457,9 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
                 logger.info(res.content)
                 raise ValueError(res.content.decode())
         except ValueError as e:
-            traceback.print_exc()
-            logger.info(traceback.format_exc())
             logger.info("Unable to post p2p data")
             if str(e)=="update_json unavailable" or "empty collection" in str(e):
+                logger.info(traceback.format_exc())
                 raise e
 
 

@@ -1,16 +1,34 @@
 from flask import make_response, request, jsonify
 import threading
 from werkzeug.serving import make_server
-import requests
 import logging
 import traceback
 import socket
 from pymongo import MongoClient
+import pymongo
 import json
-from requests.exceptions import ReadTimeout
+from .globals import requests
+from collections import deque
 
 p2pbookdb = "p2pbookdb"
 collection = "nodes"
+
+
+def query_node_states(mongod_port):
+    client = MongoClient(port=mongod_port)
+    db = client[p2pbookdb]
+    current_items = list(db[collection].find({}))
+    for item in current_items:
+        del item['_id']
+    current_items = deque(sorted(current_items, key=lambda x: x['workload']))
+    return current_items
+
+
+def write_node_states(mongod_port, current_items):
+    client = MongoClient(port=mongod_port)
+    db = client[p2pbookdb]
+    db[collection].remove({})
+    db[collection].insert_many(current_items)
 
 
 def route_node_states(mongod_port):
@@ -24,6 +42,10 @@ def route_node_states(mongod_port):
     except json.decoder.JSONDecodeError:
         logger.debug("{} json decoding error. probably because of not being threadsafe".format(request.remote_addr))
         return make_response("not ok", 500)
+    except pymongo.errors.ServerSelectionTimeoutError:
+        logger.error("unable to connect to mongodb")
+        return make_response("not ok", 500)
+
     if request.method == 'POST':
         current_states = {d['address']: d for d in current_items}
         current_states.update({d['address']: d for d in request.json})
@@ -53,7 +75,7 @@ def get_state_in_wan(local_port, app_roles, password):
         part = externalipres.content.decode('utf-8').split(": ")[1]
         ip_ = part.split("<")[0]
         try:
-            echo_response = requests.get('http://{}:{}/echo'.format(ip_, local_port), timeout=3, headers={"Authorization":password})
+            echo_response = requests.get('http://{}:{}/echo'.format(ip_, local_port), headers={"Authorization":password})
             if echo_response.status_code == 200:
                 state.append({'address': ip_+":"+str(local_port),
                                           'workload': find_workload(),
@@ -72,7 +94,8 @@ def get_states_from_file(discovery_ips_file):
         with open(discovery_ips_file, 'r') as f:
             for line in f.readlines():
                 if len(line) < 4: continue
-                states.append({'address': line.strip()})
+                states.append({'address': line.strip(),
+                               'workload':0})
     return states
 
 
@@ -100,7 +123,7 @@ def query_pull_from_nodes(discovered_states):
     states = discovered_states[:]
     for state in discovered_states[:]:
         try:
-            discovered_ = requests.get('http://{}/node_states'.format(state['address']), timeout=3).json()
+            discovered_ = requests.get('http://{}/node_states'.format(state['address'])).json()
             states.extend(discovered_)
         except:
             #some adresses may be dead
@@ -115,7 +138,7 @@ def push_to_nodes(discovered_states):
     # publish the results to the current node and also to the rest of the nodes
     for state in discovered_states:
         try:
-            response = requests.post('http://{}/node_states'.format(state['address']), json=discovered_states, timeout=3)
+            response = requests.post('http://{}/node_states'.format(state['address']), json=discovered_states)
         except:
             logger.info("{} no longer exists".format(state['address']))
             # some adresses may be dead
@@ -123,54 +146,38 @@ def push_to_nodes(discovered_states):
             pass
 
 
-def update_function(local_port, app_roles, discovery_ips_file, password):
+def initial_discovery(mongod_port, local_port, app_roles, discovery_ips_file, password, isbroker=False):
+    discovered_states = []
+    res = query_node_states(mongod_port)
+    discovered_states.extend(res)
+    if isbroker:
+        discovered_states.append(get_state_in_lan(local_port, app_roles))
+        discovered_states.extend(get_state_in_wan(local_port, app_roles, password))
+    discovered_states.extend(get_states_from_file(discovery_ips_file))
+    discovered_states = set_from_list(discovered_states)
+    write_node_states(mongod_port, discovered_states)
+
+
+def update_function(mongod_port):
     """
     Function for bookkeeper to make network discovery
     discovery_ips_file: can be None
     """
     #TODO invetigate why the call blocks and needs to have a timeout or at least set timeouts for all requests
-    logger = logging.getLogger(__name__)
 
     discovered_states = []
 
-    # get the current list of nodes
-    try:
-        res = requests.get('http://localhost:{}/node_states'.format(local_port), timeout=3).json()  # will get the data defined above
-        discovered_states.extend(res)
-    except ReadTimeout:
-        logger.warning("Unable to contact localhost for getting current node states")
-        logger.info(traceback.format_exc())
-    except Exception as e:
-        print("raised some error hereee", str(e))
-        raise e
-
-    # get the current node state in LAN
-    discovered_states.append(get_state_in_lan(local_port, app_roles))
-    discovered_states.extend(get_state_in_wan(local_port, app_roles, password))
-    discovered_states.extend(get_states_from_file(discovery_ips_file))
+    res = query_node_states(mongod_port)
+    discovered_states.extend(res)
 
     discovered_states = set_from_list(discovered_states)
 
     # query the remote nodes
     discovered_states = query_pull_from_nodes(discovered_states)
 
-    # also store them
-    write_states_to_file(discovery_ips_file, discovered_states)
-
     discovered_states = list(filter(lambda d: len(d) > 1, discovered_states))
 
-    for state in discovered_states:
-        if '_id' in state:
-            del state['_id']
-
-    try:
-        # publish them locally
-        requests.post('http://localhost:{}/node_states'.format(local_port), json=discovered_states, timeout=3)
-    except ReadTimeout:
-        logger.warning("Unable to contact localhost for publishing new node states")
-    except Exception as e:
-        print("raised some error heree", str(e))
-        raise e
+    write_node_states(mongod_port, discovered_states)
 
     # publish them remotely
     push_to_nodes(discovered_states)
@@ -207,7 +214,7 @@ class ServerThread(threading.Thread):
         res = self.client.post("/node_states", json=data)
         if central_host is not None and central_port is not None:
             # register self state to central service
-            res = requests.post('http://{}:{}/node_states'.format(central_host, central_port), json=data, timeout=1)
+            res = requests.post('http://{}:{}/node_states'.format(central_host, central_port), json=data)
             # register remote states to local service
             res = self.client.post("/node_states", json=requests.get('http://{}:{}/node_states'.format(central_host, central_port)).json())
 
