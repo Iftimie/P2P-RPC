@@ -1,7 +1,6 @@
 from .globals import requests
-from .base import P2PFlaskApp, is_debug_mode
+from .base import P2PFlaskApp
 from flask import make_response, jsonify
-from .base import derive_vars_from_function
 import time
 from flask import request
 from functools import wraps, partial
@@ -10,31 +9,28 @@ from .p2pdata import p2p_route_insert_one, deserialize_doc_from_net, p2p_route_p
 from .p2pdata import find, p2p_push_update_one
 from pymongo import MongoClient
 import pymongo
-import inspect
 import logging
 from json import dumps, loads
 from .base import configure_logger
-from collections import defaultdict
 import os
-from .p2pdata import deserialize_doc_from_db
 from .registry_args import remove_values_from_doc, db_encoder
-from multiprocessing import Process
 import traceback
 from collections import Callable
-import psutil
-from typing import List
 
 
 def call_remote_func(ip, port, db, col, func_name, filter, password):
     """
     Client wrapper function over REST Api call
     """
+    logger = logging.getLogger(__name__)
+
     data = {"filter_json": dumps(filter)}
 
     url = "http://{ip}:{port}/execute_function/{db}/{col}/{fname}".format(ip=ip, port=port, db=db, col=col,
                                                                           fname=func_name)
     res = requests.post(url, files={}, data=data, headers={"Authorization": password})
     if res.status_code == 404 and b'Filter not found' in res.content:
+        logger.error("Filter not found {} on broker {} {}".format(filter, ip, port))
         raise ValueError("Filter not found {} on broker {} {}".format(filter, ip, port))
     return res
 
@@ -56,11 +52,16 @@ def delete_remote_func(ip, port, db, col, func_name, filter, password):
     return res
 
 def check_function_termination(ip, port, db, col, func_name, filter, password):
+    logger = logging.getLogger(__name__)
+
     data = {"filter_json": dumps(filter)}
 
     url = "http://{ip}:{port}/check_function_termination/{db}/{col}/{fname}".format(ip=ip, port=port, db=db, col=col,
                                                                           fname=func_name)
     res = requests.post(url, files={}, data=data, headers={"Authorization": password})
+    if res.status_code == 404 and b'Filter not found' in res.content:
+        logger.error("Filter not found {} on broker {} {}".format(filter, ip, port))
+        raise ValueError("Filter not found {} on broker {} {}".format(filter, ip, port))
     return res
 
 
@@ -192,7 +193,7 @@ def function_executor(p2pworkerfunction, p2pworkerarguments, logging_queue):
     try:
         update_ = original_function(**interpreted_kwargs)
     except Exception as e:
-        log_message = "Function execution crashed for filter: {}\n".format(str(filter)) + traceback.format_exc()
+        log_message = "Function execution crashed for filter: {}\n".format(str(filter_)) + traceback.format_exc()
         logger.error(log_message)
         p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port,
                             p2pworkerfunction.p2pfunction.db_name,
@@ -269,7 +270,7 @@ def route_check_function_deletion(p2pbrokerfunction):
     if p2pbrokerarguments.started=='terminated' and p2pbrokerarguments.delete_clientworker is False:
         # we need to check that delete_clientworker is False because before the call of function_deletion, a signal was sent as
         # delete_clientworker is True so that the clientworker can delete it
-        p2pbrokerfunction.remove_arguments_from_db(filter)
+        p2pbrokerfunction.remove_arguments_from_db(p2pbrokerarguments)
         return jsonify({"status": True})
     else:
         return jsonify({"status": False})
@@ -358,7 +359,9 @@ def heartbeat(mongod_port, db="tms"):
     return make_response("Thank god you are alive", 200)
 
 
-def delete_old_requests(registry_functions, time_limit=24, include_finished=True):
+def delete_old_requests(registry_functions, time_limit=24):
+    logger = logging.getLogger(__name__)
+
     for p2pbrokerfunction in registry_functions.values():
         for p2pbrokerargument in p2pbrokerfunction.list_all_arguments():
             # if p2pbrokerargument.started == 'terminated' and include_finished:
@@ -366,6 +369,8 @@ def delete_old_requests(registry_functions, time_limit=24, include_finished=True
             #     p2pbrokerfunction.remove_arguments_from_db(p2pbrokerargument)
             if time.time() - p2pbrokerargument.timestamp > time_limit * 3600:
                 p2pbrokerfunction.remove_arguments_from_db(p2pbrokerargument)
+                logger.info(f"Removed {p2pbrokerargument.object2doc()}")
+
 
 
 def route_registered_functions(registry_functions):
@@ -405,7 +410,7 @@ def create_bookkeeper_p2pblueprint(mongod_port) -> P2PBlueprint:
 from .bookkeeper import initial_discovery, update_function
 class P2PBrokerworkerApp(P2PFlaskApp):
 
-    def __init__(self, discovery_ips_file, cache_path, local_port=5001, mongod_port=5101, password="", old_requests_time_limit=23, include_finished=True):
+    def __init__(self, discovery_ips_file, cache_path, local_port=5001, mongod_port=5101, password="", old_requests_time_limit=23):
         configure_logger("brokerworker", module_level_list=[(__name__, 'DEBUG')])
         super(P2PBrokerworkerApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
                                                  cache_path=cache_path, password=password)
@@ -417,8 +422,7 @@ class P2PBrokerworkerApp(P2PFlaskApp):
         self._initial_funcs.append(partial(initial_discovery, mongod_port, local_port, self.roles, discovery_ips_file, self.crypt_pass, isbroker=True))
         self.register_time_regular_func(partial(delete_old_requests,
                                                 registry_functions=self.registry_functions,
-                                                time_limit=old_requests_time_limit,
-                                                include_finished=include_finished))
+                                                time_limit=old_requests_time_limit))
         bookkeeper_bp = create_bookkeeper_p2pblueprint(mongod_port=self.mongod_port)
         self.register_blueprint(bookkeeper_bp)
 

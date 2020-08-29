@@ -1,4 +1,4 @@
-from .base import P2PFlaskApp, P2PFunction, P2PArguments, is_debug_mode
+from .base import P2PFlaskApp, P2PFunction, P2PArguments
 from .bookkeeper import query_node_states
 from functools import wraps
 from functools import partial
@@ -20,16 +20,8 @@ from .p2pdata import find
 from werkzeug.serving import make_server
 from .base import configure_logger
 import os
-import traceback
-from collections import defaultdict, Callable
-from p2prpc.p2pdata import update_one
-import tempfile
-import pickle
+from collections import Callable
 from .registry_args import kicomp
-from collections import deque
-from pymongo import MongoClient
-from p2prpc.registry_args import deserialize_doc_from_db, remove_values_from_doc
-import dis
 
 
 def select_lru_worker(p2pfunction):
@@ -109,7 +101,8 @@ def get_remote_future(p2pclientfunction, p2pclientarguments):
     fsf = frozenset(filter_.items())
     while fsf in p2pclientfunction.running_jobs and p2pclientfunction.running_jobs[fsf][0].is_alive():
         time.sleep(4)
-        logger.info(f"Waiting for uploading job to finish. filter is {filter_}")
+        logger.info(f"Waiting for uploading job to finish. filter is {filter_}, job is alive {p2pclientfunction.running_jobs[fsf][0].is_alive()}"
+                    f"pid is {p2pclientfunction.running_jobs[fsf][0].pid}")
         # what if due to expiration on broker, the upload didn't even finish??
         # even if the item is expired on broker. the upload part is guaranteed to finish. as long as user does not
         # terminate upload
@@ -146,11 +139,13 @@ class Future:
             self.p2pclientarguments = get_remote_future(self.p2pclientfunction, self.p2pclientarguments)
             if 'error' in self.p2pclientarguments.p2parguments.outputs and \
                     self.p2pclientarguments.p2parguments.outputs['error'] != None:
-                print("error, maybe the item is missing on broker due to expiration, or anything else")
-                raise Exception(str(self.p2pclientarguments.object2doc()))
+                document = self.p2pclientarguments.object2doc()
+                logger.error(f"Error while executing function for document {document}")
+                raise Exception(str(document))
             time.sleep(wait_time)
             count_time += wait_time
             if count_time > timeout:
+                logger.error(f"Waiting time exceeded for document {self.p2pclientarguments.object2doc()}")
                 raise TimeoutError("Waiting time exceeded")
         logger.info(f"{self.p2pclientarguments.p2parguments.args_identifier} finished")
         return self.p2pclientarguments.p2parguments.outputs
@@ -190,6 +185,7 @@ class Future:
             time.sleep(3)
 
     def restart(self):
+        logger = logging.getLogger(__name__)
         self.terminate()
         search_filter = {"$or": [{"identifier": self.p2pclientarguments.p2parguments.args_identifier},
                                  {"identifier": self.p2pclientarguments.remote_args_identifier}]}
@@ -199,6 +195,8 @@ class Future:
                          self.p2pclientfunction.p2pfunction.function_name,
                          search_filter,
                          self.p2pclientfunction.p2pfunction.crypt_pass)
+        logger.info(f"Function restarted for filter {search_filter}")
+
 
     def delete(self):
         self.terminate()
@@ -362,10 +360,10 @@ class P2PClientFunction:
                        serializable_document, nodes,
                        current_address_func=partial(self_is_reachable, self.local_port),
                        password=self.p2pfunction.crypt_pass, do_upload=True)
-        logger.info("Uploading finished")
+        logger.info(f"Uploading finished. pid is {os.getpid()}")
         call_remote_func(ip, port, self.p2pfunction.db_name, self.p2pfunction.db_collection, self.p2pfunction.function_name,
                          filter_, self.p2pfunction.crypt_pass)
-        logger.info("call_remote_func finished")
+        logger.info(f"call_remote_func finished. pid is {os.getpid()}")
 
     def register_arguments_in_db(self, p2pclientarguments, nodes):
         serializable_document = p2pclientarguments.object2doc()

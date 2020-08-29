@@ -454,12 +454,14 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
                     # in cases when res.headers['update_json'] does not contain update_json
                     raise ValueError("update_json unavailable")
             else:
-                logger.info(res.content)
                 raise ValueError(res.content.decode())
         except ValueError as e:
-            logger.info("Unable to post p2p data")
+            logger.error("Unable to pull p2p data")
             if str(e)=="update_json unavailable" or "empty collection" in str(e):
-                logger.info(str(e))
+                logger.error(str(e))
+                raise e
+                # errors should be raised here so that client future can crash in case data is deleted on broker
+                # for test upload_only_no_execution_multiple_large_files
 
 
     update = merging_func(collection_res[0], merging_data)

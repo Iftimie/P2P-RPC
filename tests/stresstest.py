@@ -125,6 +125,7 @@ def delete_old_requests(tmpdir, port_offset, func, file=None):
         for i in range(num_calls):
             future = executor.submit(client_func, video_handle=open(file, 'rb'), random_arg=i)
             list_futures_of_futures.append(future)
+            time.sleep(2)
         list_futures = [f.result() for f in list_futures_of_futures]
         assert len(list_futures) <= num_calls
         list_results = [f.get() for f in list_futures]
@@ -168,14 +169,14 @@ def upload_only_no_execution_multiple_large_files(tmpdir, port_offset, func, fil
     cache_bw_dir = os.path.join(tmpdir, "bw")
     with open(ndclient_path, "w") as f: f.write("localhost:{}\n".format(broker_port))
     client_app = create_p2p_client_app(ndclient_path, local_port=client_port, mongod_port=client_port+100, cache_path=cache_client_dir)
-    client_func = client_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+    client_func = client_app.register_p2p_func()(func)
 
     broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port+100, cache_path=cache_bw_dir,
-                                           old_requests_time_limit=(1/3600) * 10, include_finished=False)
-    broker_worker_app.register_p2p_func(can_do_locally_func=lambda :False)(func)
+                                           old_requests_time_limit=(1/3600) * 10)
+    broker_worker_app.register_p2p_func()(func)
     broker_worker_thread = ServerThread(broker_worker_app, 10)
     broker_worker_thread.start()
-    while select_lru_worker(client_port, func, client_app.crypt_pass) == (None, None):
+    while select_lru_worker(client_app.registry_functions[func.__name__]) == (None, None):
         time.sleep(3)
         print("Waiting for client to know about broker")
 
@@ -184,6 +185,7 @@ def upload_only_no_execution_multiple_large_files(tmpdir, port_offset, func, fil
         list_futures_of_futures = []
         for i in range(num_calls):
             future = executor.submit(client_func, video_handle=open(file, 'rb'), random_arg=i)
+            time.sleep(1)
             list_futures_of_futures.append(future)
 
         list_futures = []
@@ -226,13 +228,13 @@ def function_crash_on_clientworker_test(tmpdir, port_offset, func, file):
     cache_bw_dir = os.path.join(tmpdir, "bw")
     with open(ndclient_path, "w") as f: f.write("localhost:{}\n".format(broker_port))
     client_app = create_p2p_client_app(ndclient_path, local_port=client_port, mongod_port=client_port+100, cache_path=cache_client_dir)
-    client_func = client_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+    client_func = client_app.register_p2p_func()(func)
 
     broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port+100, cache_path=cache_bw_dir)
-    broker_worker_app.register_p2p_func(can_do_locally_func=lambda :False)(func)
+    broker_worker_app.register_p2p_func()(func)
     broker_worker_thread = ServerThread(broker_worker_app, 10)
     broker_worker_thread.start()
-    while select_lru_worker(client_port, func, client_app.crypt_pass) == (None, None):
+    while select_lru_worker(client_app.registry_functions[func.__name__]) == (None, None):
         time.sleep(3)
         print("Waiting for client to know about broker")
 
@@ -245,7 +247,7 @@ def function_crash_on_clientworker_test(tmpdir, port_offset, func, file):
     clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(func)
     clientworker_thread = ServerThread(clientworker_app)
     clientworker_thread.start()
-    while select_lru_worker(client_worker_port, func, client_app.crypt_pass) == (None, None):
+    while select_lru_worker(clientworker_app.registry_functions[func.__name__].p2pfunction) == (None, None):
         time.sleep(3)
         print("Waiting for clientworker to know about broker")
 
@@ -294,13 +296,13 @@ def function_restart_unfinished_upload_on_broker(tmpdir, port_offset, func):
     cache_bw_dir = os.path.join(tmpdir, "bw")
     with open(ndclient_path, "w") as f: f.write("localhost:{}\n".format(broker_port))
     client_app = create_p2p_client_app(ndclient_path, local_port=client_port, mongod_port=client_port+100, cache_path=cache_client_dir)
-    client_func = client_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+    client_func = client_app.register_p2p_func()(func)
 
     broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port+100, cache_path=cache_bw_dir)
-    broker_worker_app.register_p2p_func(can_do_locally_func=lambda :False)(func)
+    broker_worker_app.register_p2p_func()(func)
     broker_worker_thread = ServerThread(broker_worker_app, 10)
     broker_worker_thread.start()
-    while select_lru_worker(client_port, func, client_app.crypt_pass) == (None, None):
+    while select_lru_worker(client_app.registry_functions[func.__name__]) == (None, None):
         time.sleep(3)
         print("Waiting for client to know about broker")
 
@@ -313,7 +315,7 @@ def function_restart_unfinished_upload_on_broker(tmpdir, port_offset, func):
     clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(func)
     clientworker_thread = ServerThread(clientworker_app)
     clientworker_thread.start()
-    while select_lru_worker(client_worker_port, func, client_app.crypt_pass) == (None, None):
+    while select_lru_worker(clientworker_app.registry_functions[func.__name__].p2pfunction) == (None, None):
         time.sleep(3)
         print("Waiting for clientworker to know about broker")
 
@@ -323,6 +325,7 @@ def function_restart_unfinished_upload_on_broker(tmpdir, port_offset, func):
         try:
             p2p_future.restart()
         except Exception as e:
+            print(str(e))
             assert "Filter not found" in str(e)
         # assert len(list_results) == num_calls and all(isinstance(r, dict) for r in list_results)
         # print(list_results)
@@ -353,14 +356,14 @@ def function_restart_on_clientworker(tmpdir, port_offset, func):
         f.write("localhost:{}\n".format(broker_port))
     client_app = create_p2p_client_app(ndclient_path, local_port=client_port, mongod_port=client_port + 100,
                                        cache_path=cache_client_dir)
-    client_func = client_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+    client_func = client_app.register_p2p_func()(func)
 
     broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port + 100,
                                            cache_path=cache_bw_dir)
-    broker_worker_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+    broker_worker_app.register_p2p_func()(func)
     broker_worker_thread = ServerThread(broker_worker_app, 10)
     broker_worker_thread.start()
-    while select_lru_worker(client_port, func, client_app.crypt_pass) == (None, None):
+    while select_lru_worker(client_app.registry_functions[func.__name__]) == (None, None):
         time.sleep(3)
         print("Waiting for client to know about broker")
 
@@ -374,7 +377,7 @@ def function_restart_on_clientworker(tmpdir, port_offset, func):
     clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(func)
     clientworker_thread = ServerThread(clientworker_app)
     clientworker_thread.start()
-    while select_lru_worker(client_worker_port, func, client_app.crypt_pass) == (None, None):
+    while select_lru_worker(clientworker_app.registry_functions[func.__name__].p2pfunction) == (None, None):
         time.sleep(3)
         print("Waiting for clientworker to know about broker")
 
@@ -409,15 +412,15 @@ def function_delete_on_clientworker(tmpdir, port_offset, func):
         f.write("localhost:{}\n".format(broker_port))
     client_app = create_p2p_client_app(ndclient_path, local_port=client_port, mongod_port=client_port + 100,
                                        cache_path=cache_client_dir)
-    client_func = client_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+    client_func = client_app.register_p2p_func()(func)
 
     broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port + 100,
                                            cache_path=cache_bw_dir)
-    broker_worker_app.register_p2p_func(can_do_locally_func=lambda: False)(func)
+    broker_worker_app.register_p2p_func()(func)
     broker_worker_thread = ServerThread(broker_worker_app, 10)
     broker_worker_thread.start()
-    while select_lru_worker(client_port, func, client_app.crypt_pass) == (None, None):
-        time.sleep(0.5)
+    while select_lru_worker(client_app.registry_functions[func.__name__]) == (None, None):
+        time.sleep(3)
         print("Waiting for client to know about broker")
 
     ndcw_path = os.path.join(tmpdir, "ndcw.txt")
@@ -430,7 +433,7 @@ def function_delete_on_clientworker(tmpdir, port_offset, func):
     clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(func)
     clientworker_thread = ServerThread(clientworker_app)
     clientworker_thread.start()
-    while select_lru_worker(client_worker_port, func, client_app.crypt_pass) == (None, None):
+    while select_lru_worker(clientworker_app.registry_functions[func.__name__].p2pfunction) == (None, None):
         time.sleep(3)
         print("Waiting for clientworker to know about broker")
 
@@ -459,7 +462,7 @@ def function_delete_on_clientworker(tmpdir, port_offset, func):
 
 if __name__ == "__main__":
     if len(sys.argv) == 1:
-        testnum = 2
+        testnum = 7
     else:
         testnum = int(sys.argv[1])
 
