@@ -13,7 +13,7 @@ from .base import wait_until_online
 import time
 import threading
 import inspect
-from .globals import requests
+from .globals import requests, future_timeout, future_sleeptime
 from .registry_args import hash_kwargs, db_encoder
 from .p2p_brokerworker import check_remote_identifier, check_function_termination, check_function_deletion
 from .p2pdata import find
@@ -22,6 +22,10 @@ from .base import configure_logger
 import os
 from collections import Callable
 from .registry_args import kicomp
+from .bookkeeper import update_function, initial_discovery
+from .errors import ClientNoBrokerFound, ClientFunctionDifferentBytecode, ClientFunctionError, ClientFutureTimeoutError, \
+    ClientUnableFunctionTermination, ClientUnableFunctionDeletion, ClientP2PFunctionInvalidArguments, \
+    ClientHashCollision
 
 
 def select_lru_worker(p2pfunction):
@@ -41,13 +45,10 @@ def select_lru_worker(p2pfunction):
     while res:
         try:
             addr = res[0]['address']
-            # response = requests.get('http://{}/echo'.format(addr), headers={'Authorization': crypt_pass})
-            # if response.status_code != 200:
-            #     raise ValueError
             worker_functions = requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': crypt_pass}).json()
 
             if funcname not in worker_functions or worker_functions[funcname]["bytecode"] != func_bytecode:
-                raise ValueError(f"Function {funcname} in worker {addr} has different bytecode compared to local function")
+                raise ClientFunctionDifferentBytecode(p2pfunction, addr)
             break
         except:
             logger.info("worker unavailable {}".format(res[0]['address']))
@@ -127,11 +128,10 @@ class Future:
         self.p2pclientfunction = p2pclientfunction
         self.p2pclientarguments = p2pclientarguments
 
-    def get(self, timeout=3600*24):
+    def get(self, timeout=future_timeout):
         logger = logging.getLogger(__name__)
 
         count_time = 0
-        wait_time = 4
         while any(self.p2pclientarguments.p2parguments.outputs[k] is None
                   for k in self.p2pclientfunction.p2pfunction.expected_return_keys
                   if k != 'error'):
@@ -141,12 +141,12 @@ class Future:
                     self.p2pclientarguments.p2parguments.outputs['error'] != None:
                 document = self.p2pclientarguments.object2doc()
                 logger.error(f"Error while executing function for document {document}")
-                raise Exception(str(document))
-            time.sleep(wait_time)
-            count_time += wait_time
+                raise ClientFunctionError(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
+            time.sleep(future_sleeptime)
+            count_time += future_sleeptime
             if count_time > timeout:
                 logger.error(f"Waiting time exceeded for document {self.p2pclientarguments.object2doc()}")
-                raise TimeoutError("Waiting time exceeded")
+                raise ClientFutureTimeoutError(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
         logger.info(f"{self.p2pclientarguments.p2parguments.args_identifier} finished")
         return self.p2pclientarguments.p2parguments.outputs
 
@@ -173,7 +173,7 @@ class Future:
         max_trials = 10
         while True:
             if max_trials == 0:
-                raise ValueError("Unable to terminate function")
+                raise ClientUnableFunctionTermination(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
             res = check_function_termination(self.p2pclientarguments.ip, self.p2pclientarguments.port,
                                              self.p2pclientfunction.p2pfunction.db_name,
                                              self.p2pclientfunction.p2pfunction.db_collection,
@@ -214,7 +214,7 @@ class Future:
         max_trials = 10
         while True:
             if max_trials == 0:
-                raise ValueError("Unable to delete function")
+                raise ClientUnableFunctionDeletion(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
             res = check_function_deletion(self.p2pclientarguments.ip, self.p2pclientarguments.port,
                          self.p2pclientfunction.p2pfunction.db_name,
                          self.p2pclientfunction.p2pfunction.db_collection,
@@ -274,7 +274,7 @@ class P2PClientFunction:
         # TODO to prevent security issues maybe the type(arg) == declared type, not isinstance(arg, declared_type)
         """
         if len(args) != 0:
-            raise ValueError("All arguments to a function in this p2p framework need to be specified by keyword arguments")
+            ClientP2PFunctionInvalidArguments(self.p2pfunction, "All arguments to a function in this p2p framework need to be specified by keyword arguments")
 
         # check that every value passed in this function has the same type as the one declared in function annotation
         f_param_sign = inspect.signature(self.p2pfunction.original_function).parameters
@@ -282,18 +282,20 @@ class P2PClientFunction:
         for k, v in kwargs.items():
             f_param_k_annotation = f_param_sign[k].annotation
             if not isinstance(v, f_param_k_annotation):
-                raise ValueError(
-                    f"class of value {v} for argument {k} is not the same as the annotation {f_param_k_annotation}")
+                ClientP2PFunctionInvalidArguments(self.p2pfunction,
+                                                  f"class of value {v} for argument {k} is not the same as the annotation {f_param_k_annotation}")
         for value in P2PFunction.restricted_values:
             if value in kwargs.values():
-                raise ValueError(f"'{value}' string is a reserved value in this p2p framework. It helps "
+                ClientP2PFunctionInvalidArguments(self.p2pfunction, f"'{value}' string is a reserved value in this p2p framework. It helps "
                                  "identifying a file when serializing together with other arguments")
         files = [v for v in kwargs.values() if isinstance(v, io.IOBase)]
         if len(files) > 1:
-            raise ValueError("p2p framework does not currently support sending more than one file")
+            ClientP2PFunctionInvalidArguments(self.p2pfunction,
+                                              "p2p framework does not currently support sending more than one file")
         if files:
             if any(file.closed or file.mode != 'rb' or file.tell() != 0 for file in files):
-                raise ValueError("all files should be opened in read binary mode and pointer must be at start")
+                ClientP2PFunctionInvalidArguments(self.p2pfunction,
+                                                  "all files should be opened in read binary mode and pointer must be at start")
 
     def create_arguments_identifier(self, kwargs):
         """
@@ -315,7 +317,7 @@ class P2PClientFunction:
                 return identifier
             elif len(collection) != 1:
                 # we should find only one doc that has the same hash
-                raise ValueError("Multiple documents for a hash")
+                raise ClientHashCollision(self.p2pfunction, kwargs, collection)
             elif all(kicomp(kwargs[k]) == kicomp(item[k]) for item in collection for k in kwargs):
                 # we found exactly 1 doc with the same hash and we must check that it has the same arguments
                 return identifier
@@ -323,8 +325,7 @@ class P2PClientFunction:
                 # we found different arguments that produce the same hash so we must modify the hash determinastically
                 identifier = identifier_original + str(self.__salt_pepper_identifier)
                 self.__salt_pepper_identifier += 1
-                if self.__salt_pepper_identifier > 100:
-                    raise ValueError("Too many hash collisions. Change the hash function")
+                # raising an error here if salt_pepper > 100 seems like it is unlikely to raise
 
     def create_arguments_remote_identifier(self, local_args_identifier, ip, port):
         """
@@ -343,8 +344,7 @@ class P2PClientFunction:
             else:
                 local_args_identifier = original_local_identifier + str(count)
                 count += 1
-                if count > 100:
-                    raise ValueError("Too many hash collisions. Change the hash function")
+                # raising an error here if count > 100 seems like it is unlikely to raise
 
     def start_remote(self, ip, port, p2pclientarguments):
         """
@@ -422,7 +422,6 @@ class ServerThread(threading.Thread):
         self.srv.shutdown()
 
 
-from .bookkeeper import update_function, initial_discovery
 class P2PClientApp(P2PFlaskApp):
 
     def __init__(self, discovery_ips_file, cache_path, local_port=5000, mongod_port=5100, password=""):
@@ -467,7 +466,7 @@ class P2PClientApp(P2PFlaskApp):
 
                 lru_ip, lru_port = select_lru_worker(p2pclientfunction.p2pfunction)
                 if lru_ip is None:
-                    raise ValueError("No broker found")
+                    raise ClientNoBrokerFound(p2pclientfunction.p2pfunction, p2pclientarguments.p2parguments)
 
                 p2pclientarguments.remote_args_identifier = p2pclientfunction.create_arguments_remote_identifier(
                     p2pclientarguments.p2parguments.args_identifier,
