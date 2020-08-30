@@ -326,7 +326,7 @@ def function_restart_unfinished_upload_on_broker(tmpdir, port_offset, func):
             p2p_future.restart()
         except Exception as e:
             print(str(e))
-            assert "Filter not found" in str(e)
+            assert "identifier not found" in str(e)
         # assert len(list_results) == num_calls and all(isinstance(r, dict) for r in list_results)
         # print(list_results)
     client_app.background_server.shutdown()

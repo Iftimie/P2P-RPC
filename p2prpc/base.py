@@ -4,8 +4,7 @@ import time
 import threading
 import logging
 import requests
-from .bookkeeper import route_node_states, update_function
-import io
+from functools import wraps, partial
 from warnings import warn
 import collections
 import inspect
@@ -501,27 +500,24 @@ def self_is_reachable(local_port):
     It makes a call to a public server such as 'http://checkip.dyndns.org/'. Inspired from the bitcoin protocol
     else it returns None
     """
-    externalipres = requests.get('http://checkip.dyndns.org/')
-    part = externalipres.content.decode('utf-8').split(": ")[1]
-    ip_ = part.split("<")[0]
+    ans = []
+    try:
+        externalipres = requests.get('http://checkip.dyndns.org/')
+        part = externalipres.content.decode('utf-8').split(": ")[1]
+        ip_ = part.split("<")[0]
+        echo_response = requests.get('http://{}:{}/echo'.format(ip_, local_port), timeout=2)
+        if echo_response.status_code == 200:
+            ans.append("{}:{}".format(ip_, local_port))
+    except:
+        pass
 
     # LAN ip state
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.connect(("8.8.8.8", 80))
     LAN_ip_ = s.getsockname()[0]
     s.close()
-
-    try:
-        echo_response = requests.get('http://{}:{}/echo'.format(ip_, local_port), timeout=2)
-        if echo_response.status_code == 200:
-            return ["{}:{}".format(ip_, local_port), "{}:{}".format(LAN_ip_, local_port)]
-        else:
-            return ["{}:{}".format(LAN_ip_, local_port)]
-    except:
-        return ["{}:{}".format(LAN_ip_, local_port)]
-
-
-from functools import wraps, partial
+    ans.append("{}:{}".format(LAN_ip_, local_port))
+    return ans
 
 
 def ignore_decorator(f):
