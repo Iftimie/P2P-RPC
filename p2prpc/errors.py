@@ -95,3 +95,54 @@ class ClientHashCollision(Exception):
 
     def __str__(self):
         return f"Function {self.p2pfunction.function_name} received kwargs {self.kwargs} that resulted in hash collision with identifiers {self.collection}"
+
+
+class Broker2ClientIdentifierNotFound(Exception):
+    """
+    Exception raised when the response from the broker to the client results in identifier not found
+    """
+    def __init__(self, func_name, identifier):
+        self.func_name = func_name
+        self.identifier = identifier
+
+    def __str__(self):
+        return f"Function {self.func_name} resulted in identifier not found for {self.identifier}"
+
+
+class WorkerInvalidResults(Exception):
+    """
+    Exception raised when the results of executing a function do not respect the convention of this p2p framework.
+    Which is to respect the declared keys as strings and their value datatypes
+    """
+    def __init__(self, p2pfunction, p2parguments, msg):
+        self.p2pfunction=p2pfunction
+        self.p2parguments=p2parguments
+        self.msg = msg
+
+    def __str__(self):
+        return f"Function {self.p2pfunction.function_name} with identifier {self.p2parguments.args_identifier} has return error:\n" \
+               f"{self.msg}"
+
+
+class P2PDataSerializationError(Exception):
+    def __init__(self, msg):
+        self.msg=msg
+
+    def __str__(self):
+        return self.msg
+
+
+class P2PDataInvalidDocument(Exception):
+    def __init__(self, msg):
+        self.msg=msg
+
+    def __str__(self):
+        return self.msg
+
+
+class P2PDataHashCollision(Exception):
+    def __init__(self, msg):
+        self.msg=msg
+
+    def __str__(self):
+        return self.msg

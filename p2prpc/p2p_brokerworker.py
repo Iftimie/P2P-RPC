@@ -16,6 +16,10 @@ import os
 from .registry_args import remove_values_from_doc, db_encoder
 import traceback
 from collections import Callable
+from .errors import Broker2ClientIdentifierNotFound, WorkerInvalidResults
+from .base import P2PFunction
+from .base import P2PArguments
+import inspect
 
 
 def call_remote_func(ip, port, db, col, func_name, filter, password):
@@ -31,7 +35,7 @@ def call_remote_func(ip, port, db, col, func_name, filter, password):
     res = requests.post(url, files={}, data=data, headers={"Authorization": password})
     if res.status_code == 404 and b'Filter not found' in res.content:
         logger.error("Filter not found {} on broker {} {}".format(filter, ip, port))
-        raise ValueError("Filter not found {} on broker {} {}".format(filter, ip, port))
+        raise Broker2ClientIdentifierNotFound(func_name, filter)
     return res
 
 
@@ -61,7 +65,7 @@ def check_function_termination(ip, port, db, col, func_name, filter, password):
     res = requests.post(url, files={}, data=data, headers={"Authorization": password})
     if res.status_code == 404 and b'Filter not found' in res.content:
         logger.error("Filter not found {} on broker {} {}".format(filter, ip, port))
-        raise ValueError("Filter not found {} on broker {} {}".format(filter, ip, port))
+        raise Broker2ClientIdentifierNotFound(func_name, filter)
     return res
 
 
@@ -83,12 +87,7 @@ def check_remote_identifier(ip, port, db, col, func_name, identifier, password):
         return True
     elif res.status_code == 404 and res.content == b'no':
         return False
-    else:
-        raise ValueError("Problem")
 
-
-from .base import P2PFunction
-from .base import P2PArguments
 
 class P2PBrokerArguments:
     def __init__(self, expected_keys, expected_return_keys):
@@ -204,8 +203,17 @@ def function_executor(p2pworkerfunction, p2pworkerarguments, logging_queue):
     logger.info("Finished executing function: " + function_name)
     update_['progress'] = 100.0
     update_['started'] = 'terminated'
-    if not all(isinstance(k, str) for k in update_.keys()):
-        raise ValueError(f"All keys in the returned dictionary must be strings in func {function_name}")
+    return_anno = inspect.signature(original_function).return_annotation
+    for k in return_anno:
+        if k not in update_:
+            raise WorkerInvalidResults(p2pworkerfunction.p2pfunction, p2pworkerarguments.p2parguments,
+                                   f"Key {k} is missing from result dictionary")
+
+    for k, class_ in return_anno.items():
+        if not isinstance(update_[k], class_):
+            raise WorkerInvalidResults(p2pworkerfunction.p2pfunction, p2pworkerarguments.p2parguments,
+                                 f"Class of value {update_[k]} for result key {k} is not the same as the annotation {class_}")
+
     try:
         p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port,
                             p2pworkerfunction.p2pfunction.db_name,

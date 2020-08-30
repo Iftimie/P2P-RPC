@@ -3,21 +3,19 @@ from flask import request, jsonify, send_file, make_response
 from json import dumps, loads
 from werkzeug import secure_filename
 # from .base import P2PBlueprint
-from functools import partial
 import logging
 import io
 import traceback
 import os
 from typing import Tuple
 import time
-from functools import wraps
 import collections.abc
 import zipfile
-from passlib.hash import sha256_crypt
 from .registry_args import serialize_doc_for_db
 from .registry_args import deserialize_doc_from_db
 from pymongo import MongoClient
 from p2prpc.streaming import DataFilesReceiver, DataFilesStreamer
+from .errors import P2PDataSerializationError, P2PDataInvalidDocument, P2PDataHashCollision
 
 
 def zip_files(files):
@@ -61,7 +59,8 @@ def serialize_doc_for_net(data) -> Tuple[dict, str]:
     """
     file_basenames = [os.path.basename(v.name) for v in data.values() if isinstance(v, io.IOBase)]
     if len(set(file_basenames)) != len(file_basenames):
-        raise ValueError("There are keys in returned dictionary that point to the same file: {}".format([k for k, v in data.items() if isinstance(v, io.IOBase)]))
+        l = [k for k, v in data.items() if isinstance(v, io.IOBase)]
+        raise P2PDataSerializationError("There are keys in returned dictionary that point to the same file: {}".format(l))
     files = {os.path.basename(v.name): v for k, v in data.items() if isinstance(v, io.IOBase)}
     files_significance = {os.path.basename(v.name): k for k, v in data.items() if isinstance(v, io.IOBase)}
     new_data = {k: v for k, v in data.items() if not isinstance(v, io.IOBase)}
@@ -260,7 +259,7 @@ def p2p_route_pull_update_one(mongod_port, db, col, serializer=serialize_doc_for
 def validate_document(document):
     for k in document:
         if isinstance(document[k], dict):
-            raise ValueError("Cannot have nested dictionaries in current implementation")
+            raise P2PDataInvalidDocument("Cannot have nested dictionaries in current implementation")
 
 
 #https://gitlab.nsd.no/ire/python-webserver-file-submission-poc/blob/master/flask_app.py
@@ -285,7 +284,7 @@ def update_one(mongod_port, db, col, query, doc, upsert=False):
     elif len(res) == 1:
         collection.update_one(query, {"$set": doc})
     else:
-        raise ValueError("Unable to update. Query: {}. Documents: {}".format(str(query), str(res)))
+        raise P2PDataHashCollision("Unable to update. Query: {}. Documents: {}".format(str(query), str(res)))
 
 
 def find(mongod_port, db, col, query, key_interpreter_dict=None):
@@ -351,7 +350,7 @@ def p2p_push_update_one(mongod_port, db, col, filter, update,  serializer=serial
     collection = MongoClient(port=mongod_port)[db][col]
     res = list(collection.find(filter))
     if len(res) != 1:
-        raise ValueError("Unable to update. Query: {}. Documents: {}".format(str(filter), str(res)))
+        raise P2PDataHashCollision("Unable to update. Query: {}. Documents: {}".format(str(filter), str(res)))
 
     nodes = res[0]["nodes"]
     current_node = res[0]["current_address"]
@@ -389,8 +388,6 @@ class WrapperSave:
             self.bytes = response.data
         elif hasattr(response, "content"): # response from requests lib
             self.bytes = response.content
-        else:
-            raise ValueError("response does not have content data")
 
     def save(self, filepath):
         with open(filepath, 'wb') as f:
@@ -419,12 +416,12 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
     if hint_file_keys is None:
         hint_file_keys = []
 
-    req_keys = list(set(req_keys) | set(["timestamp"]))
+    req_keys = list(set(req_keys) | {"timestamp"})
 
     collection = MongoClient(port=mongod_port)[db][col]
     collection_res = list(collection.find(filter))
     if len(collection_res) != 1:
-        raise ValueError("Unable to update. Query: {}. Documents: {}".format(str(filter), str(collection_res)))
+        raise P2PDataHashCollision("Unable to update. Query: {}. Documents: {}".format(str(filter), str(collection_res)))
 
     nodes = collection_res[0]["nodes"]
 
@@ -462,7 +459,6 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
                 raise e
                 # errors should be raised here so that client future can crash in case data is deleted on broker
                 # for test upload_only_no_execution_multiple_large_files
-
 
     update = merging_func(collection_res[0], merging_data)
 
