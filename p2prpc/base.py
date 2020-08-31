@@ -237,7 +237,6 @@ class P2PFunction:
         return expected_keys, expected_return_keys
 
 
-
 class P2PBlueprint(Blueprint):
     """
     The P2PBlueprint also has a background task, a function that is designed to be called every N seconds.
@@ -358,7 +357,7 @@ class P2PFlaskApp(Flask):
         self.discovery_ips_file = discovery_ips_file
         self.crypt_pass = sha256_crypt.encrypt(password)
         self.pass_req_dec = password_required(password)
-        self.registry_functions = defaultdict(dict)
+        self.registry_functions = {}
 
         if not os.path.isabs(cache_path):
             raise ValueError("cache_path must be absolute {}".format(cache_path))

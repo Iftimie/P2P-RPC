@@ -19,6 +19,9 @@ from collections import Callable
 from .errors import Broker2ClientIdentifierNotFound, WorkerInvalidResults
 from .base import P2PFunction
 from .base import P2PArguments
+from .base import P2PBlueprint
+from .bookkeeper import route_node_states
+from .bookkeeper import initial_discovery, update_function
 import inspect
 
 
@@ -89,6 +92,15 @@ def check_remote_identifier(ip, port, db, col, func_name, identifier, password):
         return False
 
 
+def check_function_stats(ip, port, password):
+    url = "http://{ip}:{port}/function_stats".format(ip=ip, port=port)
+    res = requests.get(url, headers={"Authorization": password})
+    if res.status_code == 200:
+        return res.json()
+    else:
+        return []
+
+
 class P2PBrokerArguments:
     def __init__(self, expected_keys, expected_return_keys):
         self.p2parguments = P2PArguments(expected_keys, expected_return_keys)
@@ -140,16 +152,16 @@ class P2PBrokerFunction:
         mongodport = self.p2pfunction.mongod_port
         db_name = self.p2pfunction.db_name
         db_collection = self.p2pfunction.db_collection
+        p2pbrokerarguments = []
         try:
-            identifiers = list(item['identifier'] for item in MongoClient(port=mongodport)[db_name][db_collection].find({}))
+            for item in MongoClient(port=mongodport)[db_name][db_collection].find({}):
+                p2pbrokerargument = P2PBrokerArguments(self.p2pfunction.expected_keys,
+                                                        self.p2pfunction.expected_return_keys)
+                p2pbrokerargument.doc2object(item)
+                p2pbrokerarguments.append(p2pbrokerargument)
         except pymongo.errors.AutoReconnect:
             logger.info("Unable to connect to mongo")
-            identifiers = []
 
-        p2pbrokerarguments = []
-        for identifier in identifiers:
-            filter = {"identifier": identifier}
-            p2pbrokerarguments.append(self.load_arguments_from_db(filter))
         return p2pbrokerarguments
 
     def update_arguments_in_db(self, filter, keylist, p2pbrokerarguments):
@@ -390,8 +402,21 @@ def route_registered_functions(registry_functions):
     return jsonify(current_items)
 
 
-from .base import P2PBlueprint
-from .bookkeeper import route_node_states
+def route_function_stats(registry_functions):
+    ans = []
+    for fname, p2pbrokerfunction in registry_functions.items():
+        group = {}
+        function_details = {}
+        function_details["function_name"]=p2pbrokerfunction.p2pfunction.function_name
+        function_details["function_code"]=inspect.getsource(p2pbrokerfunction.p2pfunction.original_function)
+        p2pbrokerarguments = p2pbrokerfunction.list_all_arguments()
+        p2pbrokerarguments = [arg.object2doc() for arg in p2pbrokerarguments]
+        group["function_details"]=function_details
+        group["p2pbrokerarguments"] = p2pbrokerarguments
+        ans.append(group)
+    return jsonify(ans)
+
+
 def create_bookkeeper_p2pblueprint(mongod_port) -> P2PBlueprint:
     """
     Creates the bookkeeper blueprint
@@ -415,7 +440,6 @@ def create_bookkeeper_p2pblueprint(mongod_port) -> P2PBlueprint:
     return bookkeeper_bp
 
 
-from .bookkeeper import initial_discovery, update_function
 class P2PBrokerworkerApp(P2PFlaskApp):
 
     def __init__(self, discovery_ips_file, cache_path, local_port=5001, mongod_port=5101, password="", old_requests_time_limit=23):
@@ -433,6 +457,16 @@ class P2PBrokerworkerApp(P2PFlaskApp):
                                                 time_limit=old_requests_time_limit))
         bookkeeper_bp = create_bookkeeper_p2pblueprint(mongod_port=self.mongod_port)
         self.register_blueprint(bookkeeper_bp)
+
+        registered_functions_partial = wraps(route_registered_functions)(
+            partial(self.pass_req_dec(route_registered_functions),
+                    registry_functions=self.registry_functions))
+        self.route(f"/registered_functions/", methods=['GET'])(registered_functions_partial)
+
+        function_stats_partial = wraps(route_function_stats)(
+            partial(self.pass_req_dec(route_function_stats),
+                    registry_functions=self.registry_functions))
+        self.route(f"/function_stats/", methods=['GET'])(function_stats_partial)
 
     def register_p2p_func(self, time_limit=12):
         """
@@ -465,66 +499,71 @@ class P2PBrokerworkerApp(P2PFlaskApp):
                 partial(self.pass_req_dec(p2p_route_insert_one),
                         db=db_name, col=db_collection, mongod_port=self.mongod_port,
                         deserializer=partial(deserialize_doc_from_net, up_dir=updir, key_interpreter=key_interpreter)))
+            p2p_route_insert_one_func.__name__ = p2p_route_insert_one_func.__name__ + db_collection
             self.route(f"/insert_one/{db_name}/{db_collection}", methods=['POST'])(p2p_route_insert_one_func)
 
             p2p_route_push_update_one_func = wraps(p2p_route_push_update_one)(
                 partial(self.pass_req_dec(p2p_route_push_update_one),
                         mongod_port=self.mongod_port, db=db_name, col=db_collection,
                         deserializer=partial(deserialize_doc_from_net, up_dir=updir, key_interpreter=key_interpreter)))
+            p2p_route_push_update_one_func.__name__ = p2p_route_push_update_one_func.__name__ + db_collection
             self.route(f"/push_update_one/{db_name}/{db_collection}", methods=['POST'])(
                 p2p_route_push_update_one_func)
 
             p2p_route_pull_update_one_func = wraps(p2p_route_pull_update_one)(
                 partial(self.pass_req_dec(p2p_route_pull_update_one),
                         mongod_port=self.mongod_port, db=db_name, col=db_collection))
+            p2p_route_pull_update_one_func.__name__ = p2p_route_pull_update_one_func.__name__ + db_collection
             self.route(f"/pull_update_one/{db_name}/{db_collection}", methods=['POST'])(
                 p2p_route_pull_update_one_func)
 
             execute_function_partial = wraps(route_execute_function)(
                 partial(self.pass_req_dec(route_execute_function),
                         p2pbrokerfunction=p2pbrokerfunction))
+            execute_function_partial.__name__ = execute_function_partial.__name__ + db_collection
             self.route(f'/execute_function/{db_name}/{db_collection}/{function_name}',
                        methods=['POST'])(execute_function_partial)
 
             terminate_function_partial = wraps(route_terminate_function)(
                 partial(self.pass_req_dec(route_terminate_function),
                         p2pbrokerfunction=p2pbrokerfunction))
+            terminate_function_partial.__name__ = terminate_function_partial.__name__ + db_collection
             self.route(f'/terminate_function/{db_name}/{db_collection}/{function_name}',
                        methods=['POST'])(terminate_function_partial)
 
             delete_function_partial = wraps(route_delete_function)(
                 partial(self.pass_req_dec(route_delete_function),
                         p2pbrokerfunction=p2pbrokerfunction))
+            delete_function_partial.__name__ = delete_function_partial.__name__ + db_collection
             self.route(f'/delete_function/{db_name}/{db_collection}/{function_name}',
                        methods=['POST'])(delete_function_partial)
 
             check_function_termination_partial = wraps(route_check_function_termination)(
                 partial(self.pass_req_dec(route_check_function_termination),
                         p2pbrokerfunction=p2pbrokerfunction))
+            check_function_termination_partial.__name__ = check_function_termination_partial.__name__ + db_collection
             self.route(f'/check_function_termination/{db_name}/{db_collection}/{function_name}',
                        methods=['POST'])(check_function_termination_partial)
 
             check_function_deletion_partial = wraps(route_check_function_deletion)(
                 partial(self.pass_req_dec(route_check_function_deletion),
                         p2pbrokerfunction=p2pbrokerfunction))
+            check_function_deletion_partial.__name__ = check_function_deletion_partial.__name__ + db_collection
             self.route(f'/check_function_deletion/{db_name}/{db_collection}/{function_name}',
                        methods=['POST'])(check_function_deletion_partial)
 
             search_work_partial = wraps(route_search_work)(
                 partial(self.pass_req_dec(route_search_work),
                         p2pbrokerfunction=p2pbrokerfunction))
+            search_work_partial.__name__ = search_work_partial.__name__ + db_collection
             self.route(f"/search_work/{db_name}/{db_collection}/{function_name}", methods=['POST'])(
                 search_work_partial)
 
             identifier_available_partial = wraps(route_identifier_available)(
                 partial(self.pass_req_dec(route_identifier_available),
                         p2pbrokerfunction=p2pbrokerfunction))
+            identifier_available_partial.__name__ = identifier_available_partial.__name__ + db_collection
             self.route(f"/identifier_available/{db_name}/{db_collection}/{function_name}/<identifier>",
                        methods=['GET'])(identifier_available_partial)
-
-            registered_functions_partial = wraps(route_registered_functions)(
-                partial(self.pass_req_dec(route_registered_functions),
-                        registry_functions=self.registry_functions))
-            self.route(f"/registered_functions/", methods=['GET'])(registered_functions_partial)
 
         return inner_decorator

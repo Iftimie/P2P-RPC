@@ -26,7 +26,8 @@ from .bookkeeper import update_function, initial_discovery
 from .errors import ClientNoBrokerFound, ClientFunctionDifferentBytecode, ClientFunctionError, ClientFutureTimeoutError, \
     ClientUnableFunctionTermination, ClientUnableFunctionDeletion, ClientP2PFunctionInvalidArguments, \
     ClientHashCollision
-
+import pymongo
+from pymongo import MongoClient
 
 def select_lru_worker(p2pfunction):
     """
@@ -266,6 +267,24 @@ class P2PClientFunction:
         p2pclientarguments.doc2object(items[0])
         return p2pclientarguments
 
+    def list_all_arguments(self):
+        logger = logging.getLogger(__name__)
+
+        mongodport = self.p2pfunction.mongod_port
+        db_name = self.p2pfunction.db_name
+        db_collection = self.p2pfunction.db_collection
+        p2pclientarguments = []
+        try:
+            for item in MongoClient(port=mongodport)[db_name][db_collection].find({}):
+                p2pclientargument = P2PClientArguments({k:None for k in self.p2pfunction.expected_keys},
+                                                       self.p2pfunction.expected_return_keys)
+                p2pclientargument.doc2object(item)
+                p2pclientarguments.append(p2pclientargument)
+        except pymongo.errors.AutoReconnect:
+            logger.info("Unable to connect to mongo")
+
+        return p2pclientarguments
+
     def validate_arguments(self, args, kwargs):
         """
         After the function has been called, it's actual arguments are checked for some other constraints.
@@ -276,9 +295,10 @@ class P2PClientFunction:
         if len(args) != 0:
             ClientP2PFunctionInvalidArguments(self.p2pfunction, "All arguments to a function in this p2p framework need to be specified by keyword arguments")
 
-        # check that every value passed in this function has the same type as the one declared in function annotation
         f_param_sign = inspect.signature(self.p2pfunction.original_function).parameters
-        assert set(f_param_sign.keys()) == set(kwargs.keys())
+        if set(f_param_sign.keys()) != set(kwargs.keys()):
+            ClientP2PFunctionInvalidArguments(self.p2pfunction, f"Expected keys {set(f_param_sign.keys())}, received Keys {set(kwargs.keys())}")
+        # check that every value passed in this function has the same type as the one declared in function annotation
         for k, v in kwargs.items():
             f_param_k_annotation = f_param_sign[k].annotation
             if not isinstance(v, f_param_k_annotation):
@@ -433,6 +453,22 @@ class P2PClientApp(P2PFlaskApp):
         self.background_server = None
         self._initial_funcs.append(partial(initial_discovery, mongod_port, None, None, discovery_ips_file, None))
         self.register_time_regular_func(partial(update_function, mongod_port))
+
+    def function_stats(self):
+        ans = []
+        for p2pfunction in self.registry_functions.values():
+            p2pclientfunction = P2PClientFunction(p2pfunction.original_function, self.mongod_port, self.crypt_pass, self.local_port, self.cache_path)
+            group = {}
+            function_details = {}
+            function_details["function_name"] = p2pclientfunction.p2pfunction.function_name
+            function_details["function_code"] = inspect.getsource(p2pclientfunction.p2pfunction.original_function)
+
+            p2pclientarguments = p2pclientfunction.list_all_arguments()
+            p2pclientarguments = [arg.object2doc() for arg in p2pclientarguments]
+            group["function_details"] = function_details
+            group["p2pclientarguments"] = p2pclientarguments
+            ans.append(group)
+        return ans
 
     def register_p2p_func(self):
         """

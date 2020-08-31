@@ -460,9 +460,95 @@ def function_delete_on_clientworker(tmpdir, port_offset, func):
     print("Shutdown clientworker")
     time.sleep(3)
 
+
+def do_nothing_function(random_arg: int) -> {"results": str}:
+    return {"results": "bye"}
+
+
+def long_runningdo_nothing_function(random_arg: int) -> {"results": str}:
+    time.sleep(120)
+    return {"results": "bye"}
+
+
+def monitor_functions(tmpdir, port_offset):
+    file = __file__
+
+    client_port = 5000 + port_offset
+    broker_port = 5004 + port_offset
+
+    ndclient_path = os.path.join(tmpdir, "ndclient.txt")
+    cache_client_dir = os.path.join(tmpdir, "client")
+    cache_bw_dir = os.path.join(tmpdir, "bw")
+    with open(ndclient_path, "w") as f:
+        f.write("localhost:{}\n".format(broker_port))
+    client_app = create_p2p_client_app(ndclient_path, local_port=client_port, mongod_port=client_port + 100,
+                                       cache_path=cache_client_dir)
+    client_large_file_function = client_app.register_p2p_func()(large_file_function)
+    client_do_nothing_function = client_app.register_p2p_func()(do_nothing_function)
+    client_long_runningdo_nothing_function = client_app.register_p2p_func()(long_runningdo_nothing_function)
+
+    broker_worker_app = P2PBrokerworkerApp(None, local_port=broker_port, mongod_port=broker_port + 100,
+                                           cache_path=cache_bw_dir)
+    broker_worker_app.register_p2p_func()(large_file_function)
+    broker_worker_app.register_p2p_func()(do_nothing_function)
+    broker_worker_app.register_p2p_func()(long_runningdo_nothing_function)
+    broker_worker_thread = ServerThread(broker_worker_app, 10)
+    broker_worker_thread.start()
+    for func_ in [large_file_function, do_nothing_function, long_runningdo_nothing_function]:
+        while select_lru_worker(client_app.registry_functions[func_.__name__]) == (None, None):
+            time.sleep(3)
+            print("Waiting for client to know about broker")
+
+    ndcw_path = os.path.join(tmpdir, "ndcw.txt")
+    client_worker_port = 5005 + port_offset
+    cache_cw_dir = os.path.join(tmpdir, "cw")
+    with open(ndcw_path, "w") as f:
+        f.write("localhost:{}\n".format(broker_port))
+    clientworker_app = P2PClientworkerApp(ndcw_path, local_port=client_worker_port,
+                                          mongod_port=client_worker_port + 100, cache_path=cache_cw_dir)
+    clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(large_file_function)
+    clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(do_nothing_function)
+    clientworker_app.register_p2p_func(can_do_work_func=lambda: True)(long_runningdo_nothing_function)
+    clientworker_thread = ServerThread(clientworker_app)
+    clientworker_thread.start()
+    for func_ in [large_file_function, do_nothing_function, long_runningdo_nothing_function]:
+        while select_lru_worker(clientworker_app.registry_functions[func_.__name__].p2pfunction) == (None, None):
+            time.sleep(3)
+            print("Waiting for clientworker to know about broker")
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        pool_future1 = executor.submit(client_large_file_function, video_handle=open(file, 'rb'), random_arg=10)
+        time.sleep(5)
+        pool_future2 = executor.submit(client_do_nothing_function, random_arg=20)
+        time.sleep(5)
+        pool_future3 = executor.submit(client_long_runningdo_nothing_function, random_arg=30)
+        time.sleep(5)
+        p2p_future1 = pool_future1.result()
+        p2p_future2 = pool_future2.result()
+        p2p_future3 = pool_future3.result()
+
+    from pprint import pprint
+    print("\n\n\n Client app function stats")
+    pprint(client_app.function_stats())
+    from p2prpc.p2p_brokerworker import check_function_stats
+    print("\n\n\n Broker app function stats")
+    pprint(check_function_stats("localhost", broker_port, broker_worker_app.crypt_pass))
+    print("\n\n\n Worker app function stats")
+    pprint(check_function_stats("localhost", client_worker_port, clientworker_app.crypt_pass))
+
+    client_app.background_server.shutdown()
+    print("Shutdown client")
+    broker_worker_thread.shutdown()
+    print("Shutdown brokerworker")
+    clientworker_thread.shutdown()
+    print("Shutdown clientworker")
+    time.sleep(3)
+
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 1:
-        testnum = 7
+        testnum = 8
     else:
         testnum = int(sys.argv[1])
 
@@ -487,6 +573,8 @@ if __name__ == "__main__":
         function_restart_on_clientworker(clean_and_create(), 2050, func=long_function_upload2)
     elif testnum == 7:
         function_delete_on_clientworker(clean_and_create(), 150, func=long_function_upload2)
+    elif testnum == 8:
+        monitor_functions(clean_and_create(), 2000)
     else:
         exit(-1)
     # # TODO I still need to test what happens to a request when it remains unsolved due to outside factors (power drop)

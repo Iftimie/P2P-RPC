@@ -20,6 +20,10 @@ from .registry_args import remove_values_from_doc
 from collections import Callable
 import traceback
 from .bookkeeper import query_node_states
+from .bookkeeper import update_function, initial_discovery
+import pymongo
+from flask import make_response, jsonify
+
 
 
 def find_response_with_work(mongod_port, db, collection, func_name, password):
@@ -156,15 +160,21 @@ class P2PWorkerFunction:
         return p2pbrokerarguments
 
     def list_all_arguments(self):
+        logger = logging.getLogger(__name__)
+
         mongodport = self.p2pfunction.mongod_port
         db_name = self.p2pfunction.db_name
         db_collection = self.p2pfunction.db_collection
-        identifiers = list(item['identifier'] for item in MongoClient(port=mongodport)[db_name][db_collection].find({}))
-
         p2pworkerarguments = []
-        for identifier in identifiers:
-            filter = {"identifier": identifier}
-            p2pworkerarguments.append(self.load_arguments_from_db(filter))
+        try:
+            for item in MongoClient(port=mongodport)[db_name][db_collection].find({}):
+                p2pworkerargument = P2PWorkerArguments(self.p2pfunction.expected_keys,
+                                                        self.p2pfunction.expected_return_keys)
+                p2pworkerargument.doc2object(item)
+                p2pworkerarguments.append(p2pworkerargument)
+        except pymongo.errors.AutoReconnect:
+            logger.info("Unable to connect to mongo")
+
         return p2pworkerarguments
 
     def remove_arguments_from_db(self, p2pworkerarguments):
@@ -202,7 +212,23 @@ class P2PWorkerFunction:
         p2pworkerarguments.doc2object(items[0])
         return p2pworkerarguments
 
-from .bookkeeper import update_function, initial_discovery
+
+def route_function_stats(registry_functions):
+    # TODO this is very similar to p2pbroker. refactor
+    ans = []
+    for fname, p2workerfunction in registry_functions.items():
+        group = {}
+        function_details = {}
+        function_details["function_name"]=p2workerfunction.p2pfunction.function_name
+        function_details["function_code"]=inspect.getsource(p2workerfunction.p2pfunction.original_function)
+        p2pworkerarguments = p2workerfunction.list_all_arguments()
+        p2pworkerarguments = [arg.object2doc() for arg in p2pworkerarguments]
+        group["function_details"]=function_details
+        group["p2pworkerarguments"] = p2pworkerarguments
+        ans.append(group)
+    return jsonify(ans)
+
+
 class P2PClientworkerApp(P2PFlaskApp):
 
     def __init__(self, discovery_ips_file, cache_path, local_port=5002, mongod_port=5102, password=""):
@@ -219,6 +245,11 @@ class P2PClientworkerApp(P2PFlaskApp):
         self.register_time_regular_func(partial(check_brokerworker_deletion,
                                                          self.registry_functions))
         self.register_time_regular_func(partial(update_function, mongod_port))
+
+        function_stats_partial = wraps(route_function_stats)(
+            partial(self.pass_req_dec(route_function_stats),
+                    registry_functions=self.registry_functions))
+        self.route(f"/function_stats/", methods=['GET'])(function_stats_partial)
 
     def register_p2p_func(self, can_do_work_func):
         """
