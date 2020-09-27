@@ -2,20 +2,22 @@ from flask import make_response, request, jsonify
 import threading
 from werkzeug.serving import make_server
 import logging
-import traceback
 import socket
 from pymongo import MongoClient
 import pymongo
 import json
 from .globals import requests
 from collections import deque
+import os
+MONGO_PORT = int(os.environ['MONGO_PORT'])
+MONGO_HOST = os.environ['MONGO_HOST']
 
 p2pbookdb = "p2pbookdb"
 collection = "nodes"
 
 
-def query_node_states(mongod_port):
-    client = MongoClient(port=mongod_port)
+def query_node_states():
+    client = MongoClient(host=MONGO_HOST, port=MONGO_PORT)
     db = client[p2pbookdb]
     current_items = list(db[collection].find({}))
     for item in current_items:
@@ -24,17 +26,17 @@ def query_node_states(mongod_port):
     return current_items
 
 
-def write_node_states(mongod_port, current_items):
-    client = MongoClient(port=mongod_port)
+def write_node_states(current_items):
+    client = MongoClient(host=MONGO_HOST, port=MONGO_PORT)
     db = client[p2pbookdb]
     db[collection].remove({})
     db[collection].insert_many(current_items)
 
 
-def route_node_states(mongod_port):
+def route_node_states():
     logger = logging.getLogger(__name__)
     try:
-        client = MongoClient(port=mongod_port)
+        client = MongoClient(host=MONGO_HOST, port=MONGO_PORT)
         db = client[p2pbookdb]
         current_items = list(db[collection].find({}))
         for item in current_items:
@@ -66,6 +68,14 @@ def get_state_in_lan(local_port, app_roles):
                               'workload': find_workload(),
                               'node_type': ",".join(app_roles)}
     return state
+
+
+def get_ip_actual_service(service_port, service_name):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect((service_name, service_port))
+    ip_ = s.getpeername()[0]
+    s.close()
+    return jsonify({"service_ip": ip_})
 
 
 def get_state_in_wan(local_port, app_roles, password):
@@ -146,19 +156,18 @@ def push_to_nodes(discovered_states):
             pass
 
 
-def initial_discovery(mongod_port, local_port, app_roles, discovery_ips_file, password, isbroker=False):
+def initial_discovery(local_port, app_roles, discovery_ips_file, password):
     discovered_states = []
-    res = query_node_states(mongod_port)
+    res = query_node_states()
     discovered_states.extend(res)
-    if isbroker:
-        discovered_states.append(get_state_in_lan(local_port, app_roles))
-        discovered_states.extend(get_state_in_wan(local_port, app_roles, password))
+    discovered_states.append(get_state_in_lan(local_port, app_roles))
+    discovered_states.extend(get_state_in_wan(local_port, app_roles, password))
     discovered_states.extend(get_states_from_file(discovery_ips_file))
     discovered_states = set_from_list(discovered_states)
-    write_node_states(mongod_port, discovered_states)
+    write_node_states(discovered_states)
 
 
-def update_function(mongod_port):
+def update_function():
     """
     Function for bookkeeper to make network discovery
     discovery_ips_file: can be None
@@ -167,7 +176,7 @@ def update_function(mongod_port):
 
     discovered_states = []
 
-    res = query_node_states(mongod_port)
+    res = query_node_states()
     discovered_states.extend(res)
 
     discovered_states = set_from_list(discovered_states)
@@ -177,7 +186,7 @@ def update_function(mongod_port):
 
     discovered_states = list(filter(lambda d: len(d) > 1, discovered_states))
 
-    write_node_states(mongod_port, discovered_states)
+    write_node_states(discovered_states)
 
     # publish them remotely
     push_to_nodes(discovered_states)
@@ -225,3 +234,4 @@ class ServerThread(threading.Thread):
 
     def shutdown(self):
         self.srv.shutdown()
+

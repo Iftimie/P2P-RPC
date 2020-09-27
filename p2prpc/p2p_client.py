@@ -28,6 +28,8 @@ from .errors import ClientNoBrokerFound, ClientFunctionDifferentBytecode, Client
     ClientHashCollision
 import pymongo
 from pymongo import MongoClient
+MONGO_PORT = int(os.environ['MONGO_PORT'])
+MONGO_HOST = os.environ['MONGO_HOST']
 
 def select_lru_worker(p2pfunction):
     """
@@ -38,27 +40,40 @@ def select_lru_worker(p2pfunction):
     funcname = p2pfunction.function_name
     logger = logging.getLogger(__name__)
 
-    res = query_node_states(p2pfunction.mongod_port)
+    res = query_node_states()
 
     if len(res) == 0:
         logger.info("No broker available")
         return None, None
     while res:
         try:
-            addr = res[0]['address']
+            lru_bookkeeper_host, lru_bookkeeper_port = res[0]['address'].split(":") # TODO same thing as below
+
+
+            logger.info(f"plmplmplmplmplmplmplmplmplmplmplmplm {f'http://{lru_bookkeeper_host}:{lru_bookkeeper_port}/actual_service_ip'}")
+            service_hostip = requests.get(f'http://{lru_bookkeeper_host}:{lru_bookkeeper_port}/actual_service_ip',
+                                          headers={'Authorization': crypt_pass}).json()['service_ip']
+            service_port = str(int(lru_bookkeeper_port) - 1) # TODO there is a distinction between bookkeeper port and actual server port.
+            # server port is bookeeper_port -1
+
+            addr = f"{service_hostip}:{service_port}"
+
+            logger.info(f"plmplmplmplmplmplmplmplmplmplmplmplm {addr}")
+
             worker_functions = requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': crypt_pass}).json()
 
             if funcname not in worker_functions or worker_functions[funcname]["bytecode"] != func_bytecode:
                 raise ClientFunctionDifferentBytecode(p2pfunction, addr)
             break
-        except:
-            logger.info("worker unavailable {}".format(res[0]['address']))
+        except Exception as e:
+            logger.info("broker unavailable {} from error {}".format(res[0]['address'], e))
             res.popleft()
 
     if len(res) == 0:
         logger.info("No worker or broker available")
         return None, None
-    return res[0]['address'].split(":")
+    lru_host, lru_port = addr.split(":")
+    return lru_host, lru_port
 
 
 
@@ -82,7 +97,7 @@ def p2p_progress_hook(curidx, endidx):
     update_ = {"progress": curidx/endidx * 100}
     filter_ = actual_args['filter']
     p2pworkerfunction = actual_args['p2pworkerfunction']
-    p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port,
+    p2p_push_update_one(
                         p2pworkerfunction.p2pfunction.db_name,
                         p2pworkerfunction.p2pfunction.db_collection, filter_, update_,
                         password=p2pworkerfunction.p2pfunction.crypt_pass)
@@ -111,7 +126,7 @@ def get_remote_future(p2pclientfunction, p2pclientarguments):
 
     search_filter = {"$or": [{"identifier": p2pclientarguments.p2parguments.args_identifier},
                              {"identifier": p2pclientarguments.remote_args_identifier}]}
-    p2p_pull_update_one(p2pclientfunction.p2pfunction.mongod_port,
+    p2p_pull_update_one(
                         p2pclientfunction.p2pfunction.db_name,
                         p2pclientfunction.p2pfunction.db_collection, search_filter,
                         expected_return_keys,
@@ -251,15 +266,15 @@ class P2PClientArguments:
 
 
 class P2PClientFunction:
-    def __init__(self, original_function: Callable, mongod_port, crypt_pass, local_port, cache_path):
-        self.p2pfunction = P2PFunction(original_function, mongod_port, crypt_pass)
+    def __init__(self, original_function: Callable,  crypt_pass, local_port, cache_path):
+        self.p2pfunction = P2PFunction(original_function,  crypt_pass)
         self.updir = os.path.join(cache_path, self.p2pfunction.db_name, self.p2pfunction.db_collection)  # same as in clientworker
         self.local_port = local_port
         self.running_jobs = dict()
         self.__salt_pepper_identifier = 1
 
     def load_arguments_from_db(self, filter_):
-        items = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
+        items = find( self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
                      self.p2pfunction.args_interpreter)
         if len(items) == 0:
             return None
@@ -270,12 +285,11 @@ class P2PClientFunction:
     def list_all_arguments(self):
         logger = logging.getLogger(__name__)
 
-        mongodport = self.p2pfunction.mongod_port
         db_name = self.p2pfunction.db_name
         db_collection = self.p2pfunction.db_collection
         p2pclientarguments = []
         try:
-            for item in MongoClient(port=mongodport)[db_name][db_collection].find({}):
+            for item in MongoClient(host=MONGO_HOST, port=MONGO_PORT)[db_name][db_collection].find({}):
                 p2pclientargument = P2PClientArguments({k:None for k in self.p2pfunction.expected_keys},
                                                        self.p2pfunction.expected_return_keys)
                 p2pclientargument.doc2object(item)
@@ -330,7 +344,7 @@ class P2PClientFunction:
         identifier_original = identifier  # deepcopy
 
         while True:
-            collection = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection,
+            collection = find( self.p2pfunction.db_name, self.p2pfunction.db_collection,
                               {"identifier": identifier}, self.p2pfunction.args_interpreter)
             if len(collection) == 0:
                 # we found an identifier that is not in DB
@@ -376,7 +390,7 @@ class P2PClientFunction:
         serializable_document = p2pclientarguments.object2doc()
 
         nodes = [str(ip) + ":" + str(port)]
-        p2p_insert_one(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection,
+        p2p_insert_one( self.p2pfunction.db_name, self.p2pfunction.db_collection,
                        serializable_document, nodes,
                        current_address_func=partial(self_is_reachable, self.local_port),
                        password=self.p2pfunction.crypt_pass, do_upload=True)
@@ -387,7 +401,7 @@ class P2PClientFunction:
 
     def register_arguments_in_db(self, p2pclientarguments, nodes):
         serializable_document = p2pclientarguments.object2doc()
-        p2p_insert_one(self.p2pfunction.mongod_port, self.p2pfunction.db_name,
+        p2p_insert_one( self.p2pfunction.db_name,
                        self.p2pfunction.db_collection, serializable_document,
                        nodes,
                        current_address_func=partial(self_is_reachable, self.local_port),
@@ -403,7 +417,7 @@ class P2PClientFunction:
         """
         logger = logging.getLogger(__name__)
 
-        collection = find(self.p2pfunction.mongod_port,
+        collection = find(
                           self.p2pfunction.db_name,
                           self.p2pfunction.db_collection,
                           {"identifier": p2pclientarguments.p2parguments.args_identifier},
@@ -444,20 +458,18 @@ class ServerThread(threading.Thread):
 
 class P2PClientApp(P2PFlaskApp):
 
-    def __init__(self, discovery_ips_file, cache_path, local_port=5000, mongod_port=5100, password=""):
+    def __init__(self, discovery_ips_file, cache_path, local_port=5000,  password=""):
         configure_logger("client", module_level_list=[(__name__, 'DEBUG')])
-        super(P2PClientApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
+        super(P2PClientApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file,
                                                  cache_path=cache_path, password=password)
         self.roles.append("client")
         self.jobs = dict()
         self.background_server = None
-        self._initial_funcs.append(partial(initial_discovery, mongod_port, None, None, discovery_ips_file, None))
-        self.register_time_regular_func(partial(update_function, mongod_port))
 
     def function_stats(self):
         ans = []
         for p2pfunction in self.registry_functions.values():
-            p2pclientfunction = P2PClientFunction(p2pfunction.original_function, self.mongod_port, self.crypt_pass, self.local_port, self.cache_path)
+            p2pclientfunction = P2PClientFunction(p2pfunction.original_function, self.crypt_pass, self.local_port, self.cache_path)
             group = {}
             function_details = {}
             function_details["function_name"] = p2pclientfunction.p2pfunction.function_name
@@ -484,7 +496,7 @@ class P2PClientApp(P2PFlaskApp):
         """
 
         def inner_decorator(f):
-            p2pclientfunction = P2PClientFunction(f, self.mongod_port, self.crypt_pass, self.local_port, self.cache_path)
+            p2pclientfunction = P2PClientFunction(f,  self.crypt_pass, self.local_port, self.cache_path)
             self.add_to_super_register(p2pclientfunction.p2pfunction)
 
             os.makedirs(p2pclientfunction.updir, exist_ok=True) # same as in clientworker
@@ -532,8 +544,8 @@ class P2PClientApp(P2PFlaskApp):
         return inner_decorator
 
 
-def create_p2p_client_app(discovery_ips_file, cache_path, local_port=5000, mongod_port=5100, password="", processes=3):
-    p2p_client_app = P2PClientApp(discovery_ips_file=discovery_ips_file, local_port=local_port, mongod_port=mongod_port,
+def create_p2p_client_app(discovery_ips_file, cache_path, local_port=5000,  password="", processes=3):
+    p2p_client_app = P2PClientApp(discovery_ips_file=discovery_ips_file, local_port=local_port,
                                   cache_path=cache_path, password=password)
     p2p_client_app.background_server = ServerThread(p2p_client_app, processes=processes)
     p2p_client_app.background_server.start()

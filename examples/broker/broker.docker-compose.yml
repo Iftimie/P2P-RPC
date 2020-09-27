@@ -1,0 +1,77 @@
+---
+version: '3.3'
+services:
+
+  mongo-broker:
+    container_name: mongo-broker
+    hostname: mongo-broker
+    image: mvertes/alpine-mongo
+    ports:
+      - "27017"
+    environment:
+      - MONGO_PORT=5101
+    networks:
+      - mynet
+
+  broker-discovery:
+    container_name: broker-discovery
+    hostname: broker-discovery
+    ports:
+      - "5002:5002"
+    build:
+      context: ../../
+      dockerfile: examples/Dockerfile
+    depends_on:
+      - mongo-broker
+    volumes:
+      - ../../:/app/p2prpc/
+    environment:
+      - MONGO_PORT=27017
+      - MONGO_HOST=mongo-broker
+      - BOOKKEEPER_PORT=5002
+      - APP_ROLES=broker
+      - PASSWORD="super secret password"
+      - SERVICE_NAME=broker
+      - SERVICE_PORT=5001
+    command:
+      - bash
+      - -c
+      - |
+        cd /app/p2prpc
+        export PYTHONPATH=$$PYTHONPATH:./
+        python ./p2prpc/bookkeeper_service.py service &
+        python ./p2prpc/bookkeeper_service.py update
+    networks:
+      - mynet
+
+  broker:
+    container_name: broker
+    hostname: broker
+    ports:
+      - "5001:5001"
+    build:
+      context: ../../
+      dockerfile: examples/Dockerfile
+    depends_on:
+      - mongo-broker
+      - broker-discovery
+    volumes:
+      - ../../:/app/p2prpc/
+    environment:
+      - MONGO_PORT=27017
+      - MONGO_HOST=mongo-broker
+    command:
+      - bash
+      - -c
+      - |
+        cd /app/p2prpc
+        export PYTHONPATH=$$PYTHONPATH:./
+        python ./examples/broker/brokerworker.py
+    networks:
+      - mynet
+
+networks:
+  mynet:
+    driver: bridge
+
+# sudo docker-compose -f client.docker-compose.yml up

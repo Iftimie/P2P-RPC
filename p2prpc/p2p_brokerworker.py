@@ -23,7 +23,8 @@ from .base import P2PBlueprint
 from .bookkeeper import route_node_states
 from .bookkeeper import initial_discovery, update_function
 import inspect
-
+MONGO_PORT = int(os.environ['MONGO_PORT'])
+MONGO_HOST = os.environ['MONGO_HOST']
 
 def call_remote_func(ip, port, db, col, func_name, filter, password):
     """
@@ -130,15 +131,15 @@ class P2PBrokerArguments:
 
 
 class P2PBrokerFunction:
-    def __init__(self, original_function: Callable, mongod_port, crypt_pass):
-        self.p2pfunction = P2PFunction(original_function, mongod_port, crypt_pass)
+    def __init__(self, original_function: Callable, crypt_pass):
+        self.p2pfunction = P2PFunction(original_function, crypt_pass)
 
     @property
     def function_name(self):
         return self.p2pfunction.function_name
 
     def load_arguments_from_db(self, filter_):
-        items = find(self.p2pfunction.mongod_port, self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
+        items = find(self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
                      self.p2pfunction.args_interpreter)
         if len(items) == 0:
             return None
@@ -149,12 +150,11 @@ class P2PBrokerFunction:
     def list_all_arguments(self):
         logger = logging.getLogger(__name__)
 
-        mongodport = self.p2pfunction.mongod_port
         db_name = self.p2pfunction.db_name
         db_collection = self.p2pfunction.db_collection
         p2pbrokerarguments = []
         try:
-            for item in MongoClient(port=mongodport)[db_name][db_collection].find({}):
+            for item in MongoClient(host=MONGO_HOST, port=MONGO_PORT)[db_name][db_collection].find({}):
                 p2pbrokerargument = P2PBrokerArguments(self.p2pfunction.expected_keys,
                                                         self.p2pfunction.expected_return_keys)
                 p2pbrokerargument.doc2object(item)
@@ -167,7 +167,7 @@ class P2PBrokerFunction:
     def update_arguments_in_db(self, filter, keylist, p2pbrokerarguments):
         serializable_document = p2pbrokerarguments.object2doc()
         newvalues = {k:serializable_document[k] for k in keylist}
-        MongoClient(port=self.p2pfunction.mongod_port)[self.p2pfunction.db_name][self.p2pfunction.db_collection].update_one(
+        MongoClient(host=MONGO_HOST, port=MONGO_PORT)[self.p2pfunction.db_name][self.p2pfunction.db_collection].update_one(
             filter, {"$set": newvalues})
 
     def remove_arguments_from_db(self, p2pbrokerarguments):
@@ -177,7 +177,7 @@ class P2PBrokerFunction:
         filter_ = {"identifier": p2pbrokerarguments.p2parguments.args_identifier,
                    'remote_identifier': p2pbrokerarguments.remote_args_identifier}
 
-        MongoClient(port=self.p2pfunction.mongod_port)[self.p2pfunction.db_name][
+        MongoClient(host=MONGO_HOST, port=MONGO_PORT)[self.p2pfunction.db_name][
             self.p2pfunction.db_collection].delete_one(filter_)
 
 
@@ -392,7 +392,6 @@ def delete_old_requests(registry_functions, time_limit=24):
                 logger.info(f"Removed {p2pbrokerargument.object2doc()}")
 
 
-
 def route_registered_functions(registry_functions):
     current_items = {}
     for fname, p2pbrokerfunction in registry_functions.items():
@@ -417,46 +416,20 @@ def route_function_stats(registry_functions):
     return jsonify(ans)
 
 
-def create_bookkeeper_p2pblueprint(mongod_port) -> P2PBlueprint:
-    """
-    Creates the bookkeeper blueprint
-
-    Args:
-        local_port: integer
-        app_roles:
-        discovery_ips_file: path to file with initial configuration of the network. The file should contain a list with
-            reachable addresses
-
-    Return:
-        P2PBluePrint
-    """
-    bookkeeper_bp = P2PBlueprint("bookkeeper_bp", __name__, role="bookkeeper")
-    decorated_route_node_states = (wraps(route_node_states)(partial(route_node_states, mongod_port)))
-    bookkeeper_bp.route("/node_states", methods=['POST', 'GET'])(decorated_route_node_states)
-
-    time_regular_func = partial(update_function, mongod_port)
-    bookkeeper_bp.register_time_regular_func(time_regular_func)
-
-    return bookkeeper_bp
-
-
 class P2PBrokerworkerApp(P2PFlaskApp):
 
-    def __init__(self, discovery_ips_file, cache_path, local_port=5001, mongod_port=5101, password="", old_requests_time_limit=23):
+    def __init__(self, discovery_ips_file, cache_path, local_port=5001, password="", old_requests_time_limit=23):
         configure_logger("brokerworker", module_level_list=[(__name__, 'DEBUG')])
-        super(P2PBrokerworkerApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file, mongod_port=mongod_port,
+        super(P2PBrokerworkerApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file,
                                                  cache_path=cache_path, password=password)
         self.roles.append("brokerworker")
         self.promises = []
 
         # FIXME this if else statement in case of debug mode was introduced just for an unfortunated combination of OS
         #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaegr
-        self._initial_funcs.append(partial(initial_discovery, mongod_port, local_port, self.roles, discovery_ips_file, self.crypt_pass, isbroker=True))
         self.register_time_regular_func(partial(delete_old_requests,
                                                 registry_functions=self.registry_functions,
                                                 time_limit=old_requests_time_limit))
-        bookkeeper_bp = create_bookkeeper_p2pblueprint(mongod_port=self.mongod_port)
-        self.register_blueprint(bookkeeper_bp)
 
         registered_functions_partial = wraps(route_registered_functions)(
             partial(self.pass_req_dec(route_registered_functions),
@@ -482,7 +455,7 @@ class P2PBrokerworkerApp(P2PFlaskApp):
         """
 
         def inner_decorator(f):
-            p2pbrokerfunction = P2PBrokerFunction(f, self.mongod_port, self.crypt_pass)
+            p2pbrokerfunction = P2PBrokerFunction(f,  self.crypt_pass)
             self.add_to_super_register(p2pbrokerfunction)
 
             updir = os.path.join(self.cache_path,
@@ -497,14 +470,14 @@ class P2PBrokerworkerApp(P2PFlaskApp):
             # these functions below make more sense in p2p_data.py
             p2p_route_insert_one_func = wraps(p2p_route_insert_one)(
                 partial(self.pass_req_dec(p2p_route_insert_one),
-                        db=db_name, col=db_collection, mongod_port=self.mongod_port,
+                        db=db_name, col=db_collection,
                         deserializer=partial(deserialize_doc_from_net, up_dir=updir, key_interpreter=key_interpreter)))
             p2p_route_insert_one_func.__name__ = p2p_route_insert_one_func.__name__ + db_collection
             self.route(f"/insert_one/{db_name}/{db_collection}", methods=['POST'])(p2p_route_insert_one_func)
 
             p2p_route_push_update_one_func = wraps(p2p_route_push_update_one)(
                 partial(self.pass_req_dec(p2p_route_push_update_one),
-                        mongod_port=self.mongod_port, db=db_name, col=db_collection,
+                        db=db_name, col=db_collection,
                         deserializer=partial(deserialize_doc_from_net, up_dir=updir, key_interpreter=key_interpreter)))
             p2p_route_push_update_one_func.__name__ = p2p_route_push_update_one_func.__name__ + db_collection
             self.route(f"/push_update_one/{db_name}/{db_collection}", methods=['POST'])(
@@ -512,7 +485,7 @@ class P2PBrokerworkerApp(P2PFlaskApp):
 
             p2p_route_pull_update_one_func = wraps(p2p_route_pull_update_one)(
                 partial(self.pass_req_dec(p2p_route_pull_update_one),
-                        mongod_port=self.mongod_port, db=db_name, col=db_collection))
+                        db=db_name, col=db_collection))
             p2p_route_pull_update_one_func.__name__ = p2p_route_pull_update_one_func.__name__ + db_collection
             self.route(f"/pull_update_one/{db_name}/{db_collection}", methods=['POST'])(
                 p2p_route_pull_update_one_func)

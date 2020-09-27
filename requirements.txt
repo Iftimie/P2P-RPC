@@ -8,3 +8,4 @@ passlib
 requests
 deprecated
 celery
+requests_toolbelt

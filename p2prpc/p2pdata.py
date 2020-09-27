@@ -1,7 +1,7 @@
 from .globals import requests
 from flask import request, jsonify, send_file, make_response
 from json import dumps, loads
-from werkzeug import secure_filename
+from werkzeug.utils import secure_filename
 # from .base import P2PBlueprint
 import logging
 import io
@@ -17,6 +17,8 @@ from pymongo import MongoClient
 from p2prpc.streaming import DataFilesReceiver, DataFilesStreamer
 from .errors import P2PDataSerializationError, P2PDataInvalidDocument, P2PDataHashCollision
 
+MONGO_PORT = int(os.environ['MONGO_PORT'])
+MONGO_HOST = os.environ['MONGO_HOST']
 
 def zip_files(files):
     # TODO fix the temporary archive
@@ -125,7 +127,8 @@ def deserialize_doc_from_net(files, json, up_dir, key_interpreter=None):
     data = deserialize_doc_from_db(data, key_interpreter)
     return data
 
-def p2p_route_insert_one(mongod_port, db, col, deserializer=deserialize_doc_from_net):
+
+def p2p_route_insert_one(db, col, deserializer=deserialize_doc_from_net):
     """
     Function designed to be decorated with flask.app.route
     The function should be partially applied will all arguments
@@ -149,11 +152,11 @@ def p2p_route_insert_one(mongod_port, db, col, deserializer=deserialize_doc_from
         files = dict()
     data_to_insert = deserializer(files, r.form['json'])
     # this will insert. and if the same data exists then it will crash
-    update_one(mongod_port, db, col, data_to_insert, data_to_insert, upsert=True)
+    update_one(db, col, data_to_insert, data_to_insert, upsert=True)
     return make_response("ok")
 
 
-def p2p_route_push_update_one(mongod_port, db, col, deserializer=deserialize_doc_from_net):
+def p2p_route_push_update_one(db, col, deserializer=deserialize_doc_from_net):
     """
     Function designed to be decorated with flask.app.route
     The function should be partially applied will all arguments
@@ -188,11 +191,11 @@ def p2p_route_push_update_one(mongod_port, db, col, deserializer=deserialize_doc
     recursive = request.form["recursive"]
 
     if recursive:
-        visited_nodes = p2p_push_update_one(mongod_port, db, col, filter_data, update_data, visited_nodes=visited_nodes)
+        visited_nodes = p2p_push_update_one(db, col, filter_data, update_data, visited_nodes=visited_nodes)
     return jsonify(visited_nodes)
 
 
-def p2p_route_pull_update_one(mongod_port, db, col, serializer=serialize_doc_for_net):
+def p2p_route_pull_update_one(db, col, serializer=serialize_doc_for_net):
     """
     Function designed to be decorated with flask.app.route
     The function should be partially applied will all arguments
@@ -215,7 +218,7 @@ def p2p_route_pull_update_one(mongod_port, db, col, serializer=serialize_doc_for
     req_keys = loads(request.form['req_keys_json'])
     filter_data = loads(request.form['filter_json'])
     hint_file_keys = loads(request.form['hint_file_keys_json'])
-    required_list = list(MongoClient(port=mongod_port)[db][col].find(filter_data))
+    required_list = list(MongoClient(host=MONGO_HOST, port=MONGO_PORT)[db][col].find(filter_data))
     if not required_list:
         return make_response("filter" + str(filter_data) + "resulted in empty collection", 404)
     # TODO there is a case when filter from client contains both local and remote identifiers, and also both identifiers can be seen here
@@ -263,7 +266,7 @@ def validate_document(document):
 
 
 #https://gitlab.nsd.no/ire/python-webserver-file-submission-poc/blob/master/flask_app.py
-def update_one(mongod_port, db, col, query, doc, upsert=False):
+def update_one(db, col, query, doc, upsert=False):
     """
     This function is entry point for both insert and update.
     """
@@ -274,7 +277,7 @@ def update_one(mongod_port, db, col, query, doc, upsert=False):
     validate_document(doc)
     validate_document(query)
 
-    collection = MongoClient(port=mongod_port)[db][col]
+    collection = MongoClient(host=MONGO_HOST, port=MONGO_PORT)[db][col]
     res = list(collection.find(query))
     doc["timestamp"] = time.time()
     if len(res) == 0 and upsert is True:
@@ -287,11 +290,11 @@ def update_one(mongod_port, db, col, query, doc, upsert=False):
         raise P2PDataHashCollision("Unable to update. Query: {}. Documents: {}".format(str(query), str(res)))
 
 
-def find(mongod_port, db, col, query, key_interpreter_dict=None):
+def find(db, col, query, key_interpreter_dict=None):
 
     query = serialize_doc_for_db(query)
 
-    collection = list(MongoClient(port=mongod_port)[db][col].find(query))
+    collection = list(MongoClient(host=MONGO_HOST, port=MONGO_PORT)[db][col].find(query))
     for i in range(len(collection)):
         collection[i] = deserialize_doc_from_db(collection[i], key_interpreter_dict)
         # TODO should delete keys such as nodes, _id, timestamp?
@@ -299,7 +302,7 @@ def find(mongod_port, db, col, query, key_interpreter_dict=None):
     return collection
 
 
-def p2p_insert_one(db_path, db, col, document, nodes, serializer=serialize_doc_for_net, current_address_func=lambda : None, do_upload=True,
+def p2p_insert_one(db, col, document, nodes, serializer=serialize_doc_for_net, current_address_func=lambda : None, do_upload=True,
                    password=""):
     """
     post_func is used especially for testing
@@ -314,7 +317,7 @@ def p2p_insert_one(db_path, db, col, document, nodes, serializer=serialize_doc_f
         update["nodes"] = nodes
         update["current_address"] = current_addr
         # TODO should be insert and throw error if identifier exists
-        update_one(db_path, db, col, data, update, upsert=True)
+        update_one(db, col, data, update, upsert=True)
     except ValueError as e:
         logger.info(traceback.format_exc())
         raise e
@@ -335,19 +338,19 @@ def p2p_insert_one(db_path, db, col, document, nodes, serializer=serialize_doc_f
                 logger.warning("Unable to post p2p data",)
 
 
-def p2p_push_update_one(mongod_port, db, col, filter, update,  serializer=serialize_doc_for_net, visited_nodes=None, recursive=True,
+def p2p_push_update_one(db, col, filter, update,  serializer=serialize_doc_for_net, visited_nodes=None, recursive=True,
                         password=""):
     logger = logging.getLogger(__name__)
 
     if visited_nodes is None:
         visited_nodes = []
     try:
-        update_one(mongod_port, db, col, filter, update, upsert=False)
+        update_one(db, col, filter, update, upsert=False)
     except ValueError as e:
         logger.info(traceback.format_exc())
         raise e
 
-    collection = MongoClient(port=mongod_port)[db][col]
+    collection = MongoClient(host=MONGO_HOST, port=MONGO_PORT)[db][col]
     res = list(collection.find(filter))
     if len(res) != 1:
         raise P2PDataHashCollision("Unable to update. Query: {}. Documents: {}".format(str(filter), str(res)))
@@ -409,7 +412,7 @@ def merge_downloaded_data(original_data, merging_data):
     return result_update
 
 
-def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hint_file_keys=None, merging_func=merge_downloaded_data,
+def p2p_pull_update_one(db, col, filter, req_keys, deserializer, hint_file_keys=None, merging_func=merge_downloaded_data,
                         password=""):
     logger = logging.getLogger(__name__)
 
@@ -418,7 +421,7 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
 
     req_keys = list(set(req_keys) | {"timestamp"})
 
-    collection = MongoClient(port=mongod_port)[db][col]
+    collection = MongoClient(host=MONGO_HOST, port=MONGO_PORT)[db][col]
     collection_res = list(collection.find(filter))
     if len(collection_res) != 1:
         raise P2PDataHashCollision("Unable to update. Query: {}. Documents: {}".format(str(filter), str(collection_res)))
@@ -463,7 +466,7 @@ def p2p_pull_update_one(mongod_port, db, col, filter, req_keys, deserializer, hi
     update = merging_func(collection_res[0], merging_data)
 
     try:
-        update_one(mongod_port, db, col, filter, update, upsert=False)
+        update_one(db, col, filter, update, upsert=False)
     except ValueError as e:
         logger.info(traceback.format_exc())
         raise e

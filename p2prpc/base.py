@@ -151,11 +151,10 @@ class P2PFunction:
                            'progress', 'error', 'current_address']
     restricted_values = ["value_for_key_is_file"]
 
-    def __init__(self, original_function: Callable, mongod_port, crypt_pass):
+    def __init__(self, original_function: Callable, crypt_pass):
         self.original_function = original_function
         self.function_name = original_function.__name__
         self.args_interpreter, self.db_name, self.db_collection = self.derive_vars_from_function(original_function)
-        self.mongod_port = mongod_port
         self.expected_keys, self.expected_return_keys = self.get_expected_keys(original_function)
         self.crypt_pass = crypt_pass
 
@@ -282,17 +281,6 @@ class P2PBlueprint(Blueprint):
         return decorated_function_catcher
 
 
-def wait_for_mongo_online(mongod_port):
-    while True:
-        try:
-            client = pymongo.MongoClient(port=mongod_port)
-            client.server_info()
-            break
-        except:
-            logger.info("Mongod not online yet")
-            continue
-
-
 def is_debug_mode():
     gettrace = getattr(sys, 'gettrace', None)
     if gettrace is None:
@@ -305,6 +293,8 @@ def password_required(password):
     def internal_decorator(f):
         @wraps(f)
         def wrap(*args, **kwargs):
+            if request.headers.get('Authorization') is None:
+                return make_response("Unauthorized", 401)
             if not sha256_crypt.verify(password, request.headers.get('Authorization')):
                 return make_response("Unauthorized", 401)
             return f(*args, **kwargs)
@@ -322,7 +312,7 @@ class P2PFlaskApp(Flask):
      discovery)
     """
 
-    def __init__(self, *args, local_port=None, mongod_port=None, cache_path=None, password="", discovery_ips_file, **kwargs):
+    def __init__(self, *args, local_port=None, cache_path=None, password="", discovery_ips_file, **kwargs):
         """
         Args:
             args: positional arguments
@@ -350,9 +340,7 @@ class P2PFlaskApp(Flask):
         if local_port is None:
             local_port = find_free_port()
         self.local_port = local_port
-        self.mongod_port = mongod_port
         self.cache_path = cache_path
-        self.mongod_process = None
         self.password = password
         self.discovery_ips_file = discovery_ips_file
         self.crypt_pass = sha256_crypt.encrypt(password)
@@ -449,9 +437,6 @@ class P2PFlaskApp(Flask):
         self._time_regular_funcs.append(f)
 
     def start_background_threads(self):
-        self.mongod_process = subprocess.Popen(["mongod", "--dbpath", self.cache_path, "--port", str(self.mongod_port),
-                                                 "--logpath", os.path.join(self.cache_path, "mongodlog.log")])
-        wait_for_mongo_online(self.mongod_port)
         self._run_init_funcs()
         # TODO also kill this process
         self._logger_thread = threading.Thread(target=P2PFlaskApp._dispatch_log_records,
@@ -472,7 +457,6 @@ class P2PFlaskApp(Flask):
             logger.info("time regular thread still Alive")
         self._logging_queue.put_nowait('STOP _dispatch_log_records')
         self._logger_thread.join()
-        self.mongod_process.kill()
         # or use the command: mongod --dbpath /path/to/your/db --shutdown
 
     def run(self, *args, **kwargs):
