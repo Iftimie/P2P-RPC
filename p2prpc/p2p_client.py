@@ -199,6 +199,7 @@ class Future:
             if res.json()['status'] is True:
                 break
             time.sleep(3)
+            max_trials-=1
 
     def restart(self):
         logger = logging.getLogger(__name__)
@@ -258,6 +259,8 @@ class P2PClientArguments:
     def doc2object(self, document):
         self.p2parguments.doc2object(document)
         self.remote_args_identifier = document['remote_identifier']
+        self.ip, self.port = document['nodes'][0].split(":")
+        self.port = int(self.port)
 
     def create_generic_filter(self):
         filter_ = {"identifier": self.p2parguments.args_identifier,
@@ -510,6 +513,8 @@ class P2PClientApp(P2PFlaskApp):
                 p2pclientarguments.p2parguments.args_identifier = p2pclientfunction.create_arguments_identifier(kwargs)
                 if p2pclientfunction.arguments_already_submited(p2pclientarguments):
                     logger.info("Returning future that may already be precomputed")
+                    p2pclientarguments = p2pclientfunction.load_arguments_from_db(
+                        filter_={"identifier": p2pclientarguments.p2parguments.args_identifier})
                     return Future(p2pclientfunction, p2pclientarguments)
 
                 lru_ip, lru_port = select_lru_worker(p2pclientfunction.p2pfunction)
