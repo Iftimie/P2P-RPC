@@ -213,7 +213,7 @@ def function_executor(p2pworkerfunction, p2pworkerarguments, logging_queue):
     except Exception as e:
         log_message = "Function execution crashed for filter: {}\n".format(str(filter_)) + traceback.format_exc()
         logger.error(log_message)
-        p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port,
+        p2p_push_update_one(
                             p2pworkerfunction.p2pfunction.db_name,
                             p2pworkerfunction.p2pfunction.db_collection,
                             filter_, {"error": log_message},
@@ -234,7 +234,7 @@ def function_executor(p2pworkerfunction, p2pworkerarguments, logging_queue):
                                  f"Class of value {update_[k]} for result key {k} is not the same as the annotation {class_}")
 
     try:
-        p2p_push_update_one(p2pworkerfunction.p2pfunction.mongod_port,
+        p2p_push_update_one(
                             p2pworkerfunction.p2pfunction.db_name,
                             p2pworkerfunction.p2pfunction.db_collection,
                             filter_, update_,
@@ -254,8 +254,8 @@ def route_terminate_function(p2pbrokerfunction):
         return make_response("Filter not found {} on broker".format(filter), 404)
     p2pbrokerarguments.kill_clientworker = True
     p2pbrokerfunction.update_arguments_in_db(filter, ['kill_clientworker'], p2pbrokerarguments)
-    # must be a clientworker that is doing the job
-    logger.info("job is on clientworker {} added notification for termination".format(filter))
+    # must be a worker that is doing the job
+    logger.info("job is on worker {} added notification for termination".format(filter))
     return make_response("ok", 200)
 
 
@@ -268,7 +268,7 @@ def route_delete_function(p2pbrokerfunction):
         return make_response("Filter not found {} on broker".format(filter), 404)
     p2pbrokerarguments.delete_clientworker = True
     p2pbrokerfunction.update_arguments_in_db(filter, ['delete_clientworker'], p2pbrokerarguments)
-    logger.info("job is on clientworker {} added notification for deletion".format(filter))
+    logger.info("job is on worker {} added notification for deletion".format(filter))
     return make_response("ok", 200)
 
 
@@ -293,10 +293,10 @@ def route_check_function_deletion(p2pbrokerfunction):
     # IF job is on client worker, then a remainder of the job must still exist here
     # TODO small remainings should still exist, but the big data is important to be deleted
 
-    # there should be some mechanism so that a document is deleted only after the clientworker deleted it
+    # there should be some mechanism so that a document is deleted only after the worker deleted it
     if p2pbrokerarguments.started=='terminated' and p2pbrokerarguments.delete_clientworker is False:
         # we need to check that delete_clientworker is False because before the call of function_deletion, a signal was sent as
-        # delete_clientworker is True so that the clientworker can delete it
+        # delete_clientworker is True so that the worker can delete it
         p2pbrokerfunction.remove_arguments_from_db(p2pbrokerarguments)
         return jsonify({"status": True})
     else:
@@ -377,14 +377,6 @@ def route_identifier_available(p2pbrokerfunction, identifier):
     else:
         return make_response("no", 404)
 
-def heartbeat(mongod_port, db="tms"):
-    """
-    Pottential vulnerability from flooding here
-    """
-    collection = MongoClient(port=mongod_port)[db]["broker_heartbeats"]
-    collection.insert_one({"time_of_heartbeat": time.time()})
-    return make_response("Thank god you are alive", 200)
-
 
 def delete_old_requests(registry_functions, time_limit=24):
     logger = logging.getLogger(__name__)
@@ -451,13 +443,13 @@ class P2PBrokerworkerApp(P2PFlaskApp):
     def register_p2p_func(self, time_limit=12):
         """
         In p2p brokerworker, this decorator will have the role of either executing a function that was registered (worker role), or store the arguments in a
-         database in order to execute the function later by a clientworker (broker role).
+         database in order to execute the function later by a worker (broker role).
 
         Args:
             self: P2PFlaskApp object this instance is passed as argument from create_p2p_client_app. This is done like that
                 just to avoid making redundant Classes. Just trying to make the code more functional
             can_do_locally_func: function that returns True if work can be done locally and false if it should be done later
-                by this current node or by a clientworker
+                by this current node or by a worker
             limit=hours
         """
 

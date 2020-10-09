@@ -1,0 +1,77 @@
+---
+version: '3.3'
+services:
+
+  mongo-worker:
+    container_name: mongo-worker
+    image: mvertes/alpine-mongo
+    ports:
+      - "27017"
+    environment:
+      - MONGO_PORT=5102
+    networks:
+      - broker_mynet
+
+  worker-discovery:
+    container_name: worker-discovery
+    ports:
+      - "5004:5004"
+    build:
+      context: /home/achellaris/software/virtualenvs/tms/lib/python3.6/site-packages/p2prpc-0.0.1-py3.6.egg/p2prpc
+      dockerfile: code_generation/Dockerfile
+    depends_on:
+      - mongo-worker
+    volumes:
+      - /home/achellaris/software/virtualenvs/tms/lib/python3.6/site-packages/p2prpc-0.0.1-py3.6.egg/p2prpc:/app/worker/p2prpc/
+      - /home/achellaris/projects/P2P-RPC/example_better/discovery.txt:/app/worker/network_discovery_worker.txt
+    environment:
+      - MONGO_PORT=27017
+      - MONGO_HOST=mongo-worker
+      - BOOKKEEPER_PORT=5004
+      - APP_ROLES=worker
+      - DISCOVERY_FILE=/app/worker/network_discovery_worker.txt
+      - PASSWORD="super secret password"
+      - SERVICE_NAME=worker
+      - SERVICE_PORT=5003
+    command:
+      - bash
+      - -c
+      - |
+        cd /app/worker
+        export PYTHONPATH=$$PYTHONPATH:./
+        python ./p2prpc/bookkeeper_service.py service &
+        python ./p2prpc/bookkeeper_service.py update
+    networks:
+      - broker_mynet
+
+  worker:
+    container_name: worker
+    ports:
+      - "5003:5003"
+    build:
+      context: /home/achellaris/software/virtualenvs/tms/lib/python3.6/site-packages/p2prpc-0.0.1-py3.6.egg/p2prpc
+      dockerfile: code_generation/Dockerfile
+    depends_on:
+      - mongo-worker
+      - worker-discovery
+    volumes:
+      - /home/achellaris/software/virtualenvs/tms/lib/python3.6/site-packages/p2prpc-0.0.1-py3.6.egg/p2prpc:/app/p2prpc/
+      - /home/achellaris/projects/P2P-RPC/example_better/worker/workerapp.py:/app/worker/workerapp.py
+      - /home/achellaris/projects/P2P-RPC/example_better/function.py:/app/function.py
+    environment:
+      - MONGO_PORT=27017
+      - MONGO_HOST=mongo-worker
+    command:
+      - bash
+      - -c
+      - |
+        cd /app/
+        export PYTHONPATH=$$PYTHONPATH:./
+        python ./worker/workerapp.py
+    networks:
+      - broker_mynet
+
+networks:
+  broker_mynet:
+    external: true
+# sudo docker-compose -f worker.docker-compose.yml up

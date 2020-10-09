@@ -46,7 +46,13 @@ def select_lru_worker(p2pfunction):
     funcname = p2pfunction.function_name
     logger = logging.getLogger(__name__)
 
-    res = query_node_states()
+    res = []
+    for _ in range(10):
+        res = query_node_states()
+        if res:
+            break
+        time.sleep(1)
+        logger.info("Empty node states list")
 
     if len(res) == 0:
         logger.info("No broker available")
@@ -103,7 +109,7 @@ def p2p_progress_hook(curidx, endidx):
 
     actual_args = find_required_args()
     update_ = {"progress": curidx/endidx * 100}
-    filter_ = actual_args['filter']
+    filter_ = actual_args['filter_']
     p2pworkerfunction = actual_args['p2pworkerfunction']
     p2p_push_update_one(
                         p2pworkerfunction.p2pfunction.db_name,
@@ -193,7 +199,7 @@ class Future:
                               search_filter,
                               self.p2pclientfunction.p2pfunction.crypt_pass)
 
-        # wait termination on clientworker
+        # wait termination on worker
         max_trials = 10
         while True:
             if max_trials == 0:
@@ -235,7 +241,7 @@ class Future:
                          search_filter,
                          self.p2pclientfunction.p2pfunction.crypt_pass)
 
-        # wait deletion on both clientworker and on brokerworker
+        # wait deletion on both worker and on brokerworker
         max_trials = 10
         while True:
             if max_trials == 0:
@@ -279,7 +285,7 @@ class P2PClientArguments:
 class P2PClientFunction:
     def __init__(self, original_function: Callable,  crypt_pass, local_port, cache_path):
         self.p2pfunction = P2PFunction(original_function,  crypt_pass)
-        self.updir = os.path.join(cache_path, self.p2pfunction.db_name, self.p2pfunction.db_collection)  # same as in clientworker
+        self.updir = os.path.join(cache_path, self.p2pfunction.db_name, self.p2pfunction.db_collection)  # same as in worker
         self.local_port = local_port
         self.running_jobs = dict()
         self.__salt_pepper_identifier = 1
@@ -510,7 +516,7 @@ class P2PClientApp(P2PFlaskApp):
             p2pclientfunction = P2PClientFunction(f,  self.crypt_pass, self.local_port, self.cache_path)
             self.add_to_super_register(p2pclientfunction.p2pfunction)
 
-            os.makedirs(p2pclientfunction.updir, exist_ok=True) # same as in clientworker
+            os.makedirs(p2pclientfunction.updir, exist_ok=True) # same as in worker
 
             @wraps(f)
             def wrap(*args, **kwargs):

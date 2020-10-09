@@ -307,7 +307,7 @@ class P2PFlaskApp(Flask):
     Flask derived class for P2P applications. In this framework, the P2P app can have different roles. Not all nodes in
     the network are equal. Some act only as clients, some are reachable and act as workers or brokers, some have GPUs
      but are not reachable and thus act as workers. Given this possible set of configurations, the P2PFlaskApp has a
-     specific role (names such as "streamer", "bookkeeper", "worker", "broker", "clientworker" etc).
+     specific role (names such as "streamer", "bookkeeper", "worker", "broker", "worker" etc).
      Also given the specific role, the app may have or not a background task (for example a task that makes network
      discovery)
     """

@@ -59,7 +59,7 @@ def multiple_client_calls_client_worker(tmpdir, port_offset, func, file=None):
         print("Waiting for client to know about broker")
     while select_lru_worker(clientworker_app.registry_functions[func.__name__].p2pfunction) == (None, None):
         time.sleep(3)
-        print("Waiting for clientworker to know about broker")
+        print("Waiting for worker to know about broker")
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         num_calls = 1
@@ -77,7 +77,7 @@ def multiple_client_calls_client_worker(tmpdir, port_offset, func, file=None):
     broker_worker_thread.shutdown()
     print("Shutdown brokerworker")
     clientworker_thread.shutdown()
-    print("Shutdown clientworker")
+    print("Shutdown worker")
     time.sleep(3)
 
 
@@ -117,7 +117,7 @@ def delete_old_requests(tmpdir, port_offset, func, file=None):
         print("Waiting for client to know about broker")
     while select_lru_worker(clientworker_app.registry_functions[func.__name__].p2pfunction) == (None, None):
         time.sleep(3)
-        print("Waiting for clientworker to know about broker")
+        print("Waiting for worker to know about broker")
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         num_calls = 2
@@ -145,7 +145,7 @@ def delete_old_requests(tmpdir, port_offset, func, file=None):
     broker_worker_thread.shutdown()
     print("Shutdown brokerworker")
     clientworker_thread.shutdown()
-    print("Shutdown clientworker")
+    print("Shutdown worker")
     time.sleep(3)
 
 
@@ -249,7 +249,7 @@ def function_crash_on_clientworker_test(tmpdir, port_offset, func, file):
     clientworker_thread.start()
     while select_lru_worker(clientworker_app.registry_functions[func.__name__].p2pfunction) == (None, None):
         time.sleep(3)
-        print("Waiting for clientworker to know about broker")
+        print("Waiting for worker to know about broker")
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         num_calls = 1
@@ -276,7 +276,7 @@ def function_crash_on_clientworker_test(tmpdir, port_offset, func, file):
     broker_worker_thread.shutdown()
     print("Shutdown brokerworker")
     clientworker_thread.shutdown()
-    print("Shutdown clientworker")
+    print("Shutdown worker")
     time.sleep(3)
 
 
@@ -317,7 +317,7 @@ def function_restart_unfinished_upload_on_broker(tmpdir, port_offset, func):
     clientworker_thread.start()
     while select_lru_worker(clientworker_app.registry_functions[func.__name__].p2pfunction) == (None, None):
         time.sleep(3)
-        print("Waiting for clientworker to know about broker")
+        print("Waiting for worker to know about broker")
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         pool_future = executor.submit(client_func, file_handle=open(file, 'rb'))
@@ -334,7 +334,7 @@ def function_restart_unfinished_upload_on_broker(tmpdir, port_offset, func):
     broker_worker_thread.shutdown()
     print("Shutdown brokerworker")
     clientworker_thread.shutdown()
-    print("Shutdown clientworker")
+    print("Shutdown worker")
     time.sleep(3)
 
 
@@ -379,7 +379,7 @@ def function_restart_on_clientworker(tmpdir, port_offset, func):
     clientworker_thread.start()
     while select_lru_worker(clientworker_app.registry_functions[func.__name__].p2pfunction) == (None, None):
         time.sleep(3)
-        print("Waiting for clientworker to know about broker")
+        print("Waiting for worker to know about broker")
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         pool_future = executor.submit(client_func, file_handle=open(file, 'rb'))
@@ -395,7 +395,7 @@ def function_restart_on_clientworker(tmpdir, port_offset, func):
     broker_worker_thread.shutdown()
     print("Shutdown brokerworker")
     clientworker_thread.shutdown()
-    print("Shutdown clientworker")
+    print("Shutdown worker")
     time.sleep(3)
 
 
@@ -435,7 +435,7 @@ def function_delete_on_clientworker(tmpdir, port_offset, func):
     clientworker_thread.start()
     while select_lru_worker(clientworker_app.registry_functions[func.__name__].p2pfunction) == (None, None):
         time.sleep(3)
-        print("Waiting for clientworker to know about broker")
+        print("Waiting for worker to know about broker")
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         pool_future = executor.submit(client_func, file_handle=open(file, 'rb'))
@@ -457,7 +457,7 @@ def function_delete_on_clientworker(tmpdir, port_offset, func):
     broker_worker_thread.shutdown()
     print("Shutdown brokerworker")
     clientworker_thread.shutdown()
-    print("Shutdown clientworker")
+    print("Shutdown worker")
     time.sleep(3)
 
 
@@ -514,7 +514,7 @@ def monitor_functions(tmpdir, port_offset):
     for func_ in [large_file_function, do_nothing_function, long_runningdo_nothing_function]:
         while select_lru_worker(clientworker_app.registry_functions[func_.__name__].p2pfunction) == (None, None):
             time.sleep(3)
-            print("Waiting for clientworker to know about broker")
+            print("Waiting for worker to know about broker")
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         pool_future1 = executor.submit(client_large_file_function, video_handle=open(file, 'rb'), random_arg=10)
@@ -541,7 +541,7 @@ def monitor_functions(tmpdir, port_offset):
     broker_worker_thread.shutdown()
     print("Shutdown brokerworker")
     clientworker_thread.shutdown()
-    print("Shutdown clientworker")
+    print("Shutdown worker")
     time.sleep(3)
 
 
