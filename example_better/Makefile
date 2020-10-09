@@ -9,6 +9,7 @@ broker:
 	sudo docker-compose -f broker/broker.docker-compose.yml logs -f broker
 
 worker:
+	p2prpc generate-worker function.py discovery.txt
 	sudo docker-compose -f worker/worker.docker-compose.yml up -d
 	sudo docker-compose -f worker/worker.docker-compose.yml logs -f worker
 
