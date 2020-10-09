@@ -17,8 +17,14 @@ from pymongo import MongoClient
 from p2prpc.streaming import DataFilesReceiver, DataFilesStreamer
 from .errors import P2PDataSerializationError, P2PDataInvalidDocument, P2PDataHashCollision
 
-MONGO_PORT = int(os.environ['MONGO_PORT'])
-MONGO_HOST = os.environ['MONGO_HOST']
+if 'MONGO_PORT' in os.environ:
+    MONGO_PORT = int(os.environ['MONGO_PORT'])
+else:
+    MONGO_PORT = None
+if 'MONGO_HOST' in os.environ:
+    MONGO_HOST = os.environ['MONGO_HOST']
+else:
+    MONGO_HOST = None
 
 def zip_files(files):
     # TODO fix the temporary archive
@@ -373,7 +379,7 @@ def p2p_push_update_one(db, col, filter, update,  serializer=serialize_doc_for_n
                             "recursive": recursive}
             res = requests.post(url, files=files, data=data_to_send, headers={"Authorization": password})
             if res.status_code == 200:
-                if isinstance(res.json, collections.Callable): # from requests lib
+                if isinstance(res.json, collections.Callable):  # from requests lib
                     returned_json = res.json()
                 else: # is property
                     returned_json = res.json # from Flask test client

@@ -28,8 +28,14 @@ from .errors import ClientNoBrokerFound, ClientFunctionDifferentBytecode, Client
     ClientHashCollision
 import pymongo
 from pymongo import MongoClient
-MONGO_PORT = int(os.environ['MONGO_PORT'])
-MONGO_HOST = os.environ['MONGO_HOST']
+if 'MONGO_PORT' in os.environ:
+    MONGO_PORT = int(os.environ['MONGO_PORT'])
+else:
+    MONGO_PORT = None
+if 'MONGO_HOST' in os.environ:
+    MONGO_HOST = os.environ['MONGO_HOST']
+else:
+    MONGO_HOST = None
 
 def select_lru_worker(p2pfunction):
     """
@@ -59,7 +65,9 @@ def select_lru_worker(p2pfunction):
             addr = f"{service_hostip}:{service_port}"
 
             logger.info(f"plmplmplmplmplmplmplmplmplmplmplmplm {addr}")
+            logger.info(f"CRYPT PASS {crypt_pass}")
 
+            logger.info(requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': crypt_pass}))
             worker_functions = requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': crypt_pass}).json()
 
             if funcname not in worker_functions or worker_functions[funcname]["bytecode"] != func_bytecode:

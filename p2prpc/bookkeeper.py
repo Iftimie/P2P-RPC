@@ -9,8 +9,14 @@ import json
 from .globals import requests
 from collections import deque
 import os
-MONGO_PORT = int(os.environ['MONGO_PORT'])
-MONGO_HOST = os.environ['MONGO_HOST']
+if 'MONGO_PORT' in os.environ:
+    MONGO_PORT = int(os.environ['MONGO_PORT'])
+else:
+    MONGO_PORT = None
+if 'MONGO_HOST' in os.environ:
+    MONGO_HOST = os.environ['MONGO_HOST']
+else:
+    MONGO_HOST = None
 
 p2pbookdb = "p2pbookdb"
 collection = "nodes"

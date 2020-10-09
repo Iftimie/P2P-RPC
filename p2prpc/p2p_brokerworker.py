@@ -23,8 +23,15 @@ from .base import P2PBlueprint
 from .bookkeeper import route_node_states
 from .bookkeeper import initial_discovery, update_function
 import inspect
-MONGO_PORT = int(os.environ['MONGO_PORT'])
-MONGO_HOST = os.environ['MONGO_HOST']
+if 'MONGO_PORT' in os.environ:
+    MONGO_PORT = int(os.environ['MONGO_PORT'])
+else:
+    MONGO_PORT = None
+if 'MONGO_HOST' in os.environ:
+    MONGO_HOST = os.environ['MONGO_HOST']
+else:
+    MONGO_HOST = None
+
 
 def call_remote_func(ip, port, db, col, func_name, filter, password):
     """
