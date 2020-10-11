@@ -77,6 +77,7 @@ def select_lru_worker(p2pfunction):
             worker_functions = requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': crypt_pass}).json()
 
             if funcname not in worker_functions or worker_functions[funcname]["bytecode"] != func_bytecode:
+                # In case there are errors here, check that you have the same version of python on all services
                 raise ClientFunctionDifferentBytecode(p2pfunction, addr)
             break
         except Exception as e:
@@ -563,7 +564,7 @@ class P2PClientApp(P2PFlaskApp):
         return inner_decorator
 
 
-def create_p2p_client_app(discovery_ips_file, cache_path, local_port=5000,  password="", processes=3):
+def create_p2p_client_app(discovery_ips_file, cache_path, local_port=4999,  password="", processes=3):
     p2p_client_app = P2PClientApp(discovery_ips_file=discovery_ips_file, local_port=local_port,
                                   cache_path=cache_path, password=password)
     p2p_client_app.background_server = ServerThread(p2p_client_app, processes=processes)

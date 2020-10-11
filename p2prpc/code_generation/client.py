@@ -46,35 +46,33 @@ services:
     networks:
       - broker_mynet
 
-  client:
-    container_name: client
-    ports:
-      - "4999:4999"
-    build:
-      context: {p2prpc_package_path}
-      dockerfile: code_generation/Dockerfile
-    depends_on:
-      - mongo-client
-      - client-discovery
-    volumes:
-      - {p2prpc_package_path}:/app/p2prpc/
-      - {client_app_path}:/app/client/clientapp.py
-      - {current_function_file_path}:/app/function.py
-    environment:
-      - MONGO_PORT=27017
-      - MONGO_HOST=mongo-client
-    command:
-      - bash
-      - -c
-      - |
-        cd /app/
-        export PYTHONPATH=$$PYTHONPATH:./
-        python ./client/clientapp.py
-    networks:
-      - broker_mynet
-
 networks:
   broker_mynet:
     external: true
 # sudo docker-compose -f client.docker-compose.yml up
+"""
+
+client_app_template = \
+"""
+from p2prpc.p2p_client import create_p2p_client_app
+from {module} import {function}
+import os.path as osp
+import time
+import logging
+logger = logging.getLogger(__name__)
+
+password = "{super_secret_password}"
+path = osp.join(osp.abspath(osp.dirname(__file__)), 'clientdb')
+
+client_app = create_p2p_client_app("discovery.txt", password=password, cache_path=path)
+
+{function} = client_app.register_p2p_func()({function})
+
+kwargs = dict()
+res = {function}(**kwargs)
+print(res.get())
+
+client_app.background_server.shutdown()
+
+
 """

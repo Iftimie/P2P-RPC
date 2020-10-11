@@ -1,0 +1,9 @@
+https://github.com/karpikpl/tests-with-docker-compose
+https://github.com/karpikpl/tests-with-docker-compose/blob/master/docker-compose.yml
+https://github.com/karpikpl/tests-with-docker-compose/blob/master/test.sh
+https://medium.com/swlh/the-ultimate-guide-to-integration-testing-with-docker-compose-and-sql-f288f05032c9
+
+basically have a docker compose open with the esential services
+make shell scripts or Makefiels with the necessary scripts
+
+make integration tests on different scenarios
