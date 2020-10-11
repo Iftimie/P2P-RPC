@@ -43,6 +43,12 @@ test:
 	export PYTHONPATH=$$PYTHONPATH:./; \
 	python client/clientapp.py
 
+evaluatedbs:
+	@export MONGO_HOST=$(shell sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo-client); \
+	export MONGO_PORT=27017; \
+	export PYTHONPATH=$$PYTHONPATH:./; \
+	python evaluatedbs.py
+
 logworker:
 	sudo docker-compose -f worker/worker.docker-compose.yml logs -f worker
 

@@ -139,6 +139,7 @@ def get_remote_future(p2pclientfunction, p2pclientarguments):
         # even if the item is expired on broker. the upload part is guaranteed to finish. as long as user does not
         # terminate upload
 
+    # TODO. do I really need to be an or here? Yes I do. if I send only the remote identifier, it will no see the one locally
     search_filter = {"$or": [{"identifier": p2pclientarguments.p2parguments.args_identifier},
                              {"identifier": p2pclientarguments.remote_args_identifier}]}
     p2p_pull_update_one(
@@ -408,6 +409,39 @@ class P2PClientFunction:
         serializable_document = p2pclientarguments.object2doc()
 
         nodes = [str(ip) + ":" + str(port)]
+
+        # try:
+        #     # TODO try to check if the file is already present on remote server. this is a stupid way.
+        #     p2p_insert_one(self.p2pfunction.db_name, self.p2pfunction.db_collection,
+        #                    serializable_document, nodes,
+        #                    current_address_func=partial(self_is_reachable, self.local_port),
+        #                    password=self.p2pfunction.crypt_pass, do_upload=False)
+        #     hint_file_keys = [k for k in self.p2pfunction.expected_return_keys if
+        #                       self.p2pfunction.args_interpreter[k] == io.IOBase]
+        #     p2p_pull_update_one(
+        #         self.p2pfunction.db_name,
+        #         self.p2pfunction.db_collection, filter_,
+        #         self.p2pfunction.expected_return_keys,
+        #         deserializer=partial(deserialize_doc_from_net,
+        #                              up_dir=self.updir,
+        #                              key_interpreter=self.p2pfunction.args_interpreter),
+        #         hint_file_keys=hint_file_keys,
+        #         password=self.p2pfunction.crypt_pass)
+        #
+        #     p2pclientarguments = self.load_arguments_from_db(filter_)
+        #
+        #     if not any(p2pclientarguments.p2parguments.outputs[k] is None
+        #         for k in self.p2pfunction.expected_return_keys
+        #         if k != 'error'):
+        #         print("GOOOOOOOOOOOOOOOOT HEREE")
+        #         return
+        #     print("asdasdasdasdasd", p2pclientarguments.object2doc())
+        #     exit()
+        #
+        # except Exception as e:
+        #     print(e)
+        #     pass
+
         p2p_insert_one( self.p2pfunction.db_name, self.p2pfunction.db_collection,
                        serializable_document, nodes,
                        current_address_func=partial(self_is_reachable, self.local_port),
