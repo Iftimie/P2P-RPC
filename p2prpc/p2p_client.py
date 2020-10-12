@@ -28,6 +28,8 @@ from .errors import ClientNoBrokerFound, ClientFunctionDifferentBytecode, Client
     ClientHashCollision
 import pymongo
 from pymongo import MongoClient
+import traceback
+
 if 'MONGO_PORT' in os.environ:
     MONGO_PORT = int(os.environ['MONGO_PORT'])
 else:
@@ -329,14 +331,10 @@ class P2PClientFunction:
             if not any(p2pclientarguments.p2parguments.outputs[k] is None
                 for k in self.p2pfunction.expected_return_keys
                 if k != 'error'):
-                print("GOOOOOOOOOOOOOOOOT HEREE")
+                logger.warning("Results are already present on broker.")
                 return
-            print("asdasdasdasdasd", p2pclientarguments.object2doc())
-            exit()
-
         except Exception as e:
-            print(e)
-            pass
+            logger.error(str(e))
 
         p2p_insert_one( self.p2pfunction.db_name, self.p2pfunction.db_collection,
                        serializable_document, nodes,

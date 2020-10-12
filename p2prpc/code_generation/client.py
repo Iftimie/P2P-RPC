@@ -61,10 +61,8 @@ import time
 import logging
 logger = logging.getLogger(__name__)
 
-password = "{super_secret_password}"
-path = osp.join(osp.abspath(osp.dirname(__file__)), 'clientdb')
+client_app = create_p2p_client_app("discovery.txt", password="{super_secret_password}", cache_path=osp.join(osp.abspath(osp.dirname(__file__)), 'clientdb'))
 
-client_app = create_p2p_client_app("discovery.txt", password=password, cache_path=path)
 
 {function} = client_app.register_p2p_func()({function})
 

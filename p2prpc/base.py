@@ -328,11 +328,11 @@ class P2PFlaskApp(Flask):
         self._initial_funcs = []
         # FIXME this if else statement in case of debug mode was introduced just for an unfortunated combination of OS
         #  and PyCharm version when variables in watch were hanging with no timeout just because of multiprocessing manaegr
-        # if is_debug_mode():
-        #     self._logging_queue = multiprocessing.Queue()
-        # else:
-        self.manager = multiprocessing.Manager()
-        self._logging_queue = self.manager.Queue()
+        if is_debug_mode():
+            self._logging_queue = multiprocessing.Queue()
+        else:
+            self.manager = multiprocessing.Manager()
+            self._logging_queue = self.manager.Queue()
 
         self._time_regular_thread = None
         self._logger_thread = None

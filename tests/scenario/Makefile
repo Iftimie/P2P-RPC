@@ -21,6 +21,8 @@ services:
 
 	sudo docker-compose -f client/client.docker-compose.yml build
 	sudo docker-compose -f client/client.docker-compose.yml up -d
+	@$(MAKE) -f $(THIS_FILE) checkservices
+
 
 delete:
 	sudo docker-compose -f broker/broker.docker-compose.yml stop
@@ -34,22 +36,23 @@ delete:
 	sudo rm  client_info.log || true
 
 checkservices:
-
 	@sudo printf 'mongo-client  '; sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo-client
+	@sudo printf 'mongo-client  ' > 'iplist.txt'; sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo-client >> 'iplist.txt'
 	@sudo printf 'mongo-broker  '; sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo-broker
+	@sudo printf 'mongo-broker  ' >> 'iplist.txt'; sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo-broker >> 'iplist.txt'
 
 test:
-	@$(MAKE) -f $(THIS_FILE) evaluatedbs
+	@$(MAKE) -f $(THIS_FILE) cleandbs
 	@export MONGO_HOST=$(shell sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo-client); \
 	export MONGO_PORT=27017; \
 	export PYTHONPATH=$$PYTHONPATH:./; \
 	python client/clientapp.py
 
-evaluatedbs:
+cleandbs:
 	@export MONGO_HOST=$(shell sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo-client); \
 	export MONGO_PORT=27017; \
 	export PYTHONPATH=$$PYTHONPATH:./; \
-	python evaluatedbs.py
+	python test_utils.py clean mongo-client mongo-broker
 
 logbroker:
 	sudo docker-compose -f broker/broker.docker-compose.yml logs -f broker
