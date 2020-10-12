@@ -14,6 +14,21 @@ def cli():
     pass
 
 
+def get_p2p_functions(filename):
+    # p2prpc generate-broker function.py
+    modulecontent = open(filename).read()
+    eval(compile(modulecontent, "<string>", 'exec'))
+    functions = []
+    locals_ = locals()
+    for var_name in dir():
+        if var_name.startswith("p2prpc_") and var_name != "p2prpc_" and isinstance(locals_[var_name],
+                                                                                   collections.Callable):
+            functions.append(locals_[var_name])
+    if not functions or len(functions)>1:
+        raise ValueError("Only 1 function is supported at the moment. Make sure the function name has 'p2prpc_' prefix")
+    return functions
+
+
 @cli.command()
 @click.argument('filename')
 @click.argument('password', default='super secret password')
@@ -21,19 +36,13 @@ def generate_broker(filename, password):
     click.echo('Code generation for broker started')
     if not os.path.exists("broker"):
         os.mkdir("broker")
-    # p2prpc generate-broker function.py
-    modulecontent = open(filename).read()
-    eval(compile(modulecontent, "<string>", 'exec'))
-    functions = []
-    locals_ = locals()
-    for var_name in dir():
-        if var_name.startswith("p2prpc_") and var_name != "p2prpc_" and isinstance(locals_[var_name], collections.Callable):
-            functions.append(locals_[var_name])
+
+
     module_name = filename.split('.')[0]
     updated_broker_script_path = "broker/brokerapp.py"
     with open(updated_broker_script_path, "w") as f:
         updated_broker_script = broker_script.format(module=module_name,
-                                                     function=functions[0].__name__,
+                                                     function=get_p2p_functions(filename)[0].__name__,
                                                      super_secret_password=password)
         f.write(updated_broker_script)
 
@@ -62,21 +71,13 @@ def generate_client(filename, networkdiscovery, password, overwrite):
     if not os.path.exists("client"):
         os.mkdir("client")
 
-    # p2prpc generate-broker function.py
-    modulecontent = open(filename).read()
-    eval(compile(modulecontent, "<string>", 'exec'))
-    functions = []
-    locals_ = locals()
-    for var_name in dir():
-        if var_name.startswith("p2prpc_") and var_name != "p2prpc_" and isinstance(locals_[var_name],
-                                                                                   collections.Callable):
-            functions.append(locals_[var_name])
+
     module_name = filename.split('.')[0]
     updated_client_script_path = "client/clientapp.py"
     if not os.path.exists(updated_client_script_path) or overwrite:
         with open(updated_client_script_path, "w") as f:
             updated_client_app_template = client_app_template.format(module=module_name,
-                                                         function=functions[0].__name__,
+                                                         function=get_p2p_functions(filename)[0].__name__,
                                                          super_secret_password=password)
             f.write(updated_client_app_template)
 
@@ -101,20 +102,11 @@ def generate_worker(filename, networkdiscovery, password):
     if not os.path.exists("worker"):
         os.mkdir("worker")
 
-    # p2prpc generate-worker function.py
-    modulecontent = open(filename).read()
-    eval(compile(modulecontent, "<string>", 'exec'))
-    functions = []
-    locals_ = locals()
-    for var_name in dir():
-        if var_name.startswith("p2prpc_") and var_name != "p2prpc_" and isinstance(locals_[var_name],
-                                                                                   collections.Callable):
-            functions.append(locals_[var_name])
     module_name = filename.split('.')[0]
     updated_worker_script_path = "worker/workerapp.py"
     with open(updated_worker_script_path, "w") as f:
         updated_workerapp_string = workerapp_string.format(module=module_name,
-                                                     function=functions[0].__name__,
+                                                     function=get_p2p_functions(filename)[0].__name__,
                                                      super_secret_password=password)
         f.write(updated_workerapp_string)
 
@@ -132,7 +124,6 @@ def generate_worker(filename, networkdiscovery, password):
 
     click.echo('Code generation for worker finished')
     click.echo('Run: sudo docker-compose -f worker/worker.docker-compose.yml up')
-
 
 
 def main():
