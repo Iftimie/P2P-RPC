@@ -17,14 +17,26 @@ from pymongo import MongoClient
 from p2prpc.streaming import DataFilesReceiver, DataFilesStreamer
 from .errors import P2PDataSerializationError, P2PDataInvalidDocument, P2PDataHashCollision
 
-if 'MONGO_PORT' in os.environ:
-    MONGO_PORT = int(os.environ['MONGO_PORT'])
-else:
-    MONGO_PORT = None
-if 'MONGO_HOST' in os.environ:
-    MONGO_HOST = os.environ['MONGO_HOST']
-else:
-    MONGO_HOST = None
+
+def get_mongo():
+    if 'MONGO_PORT' in os.environ:
+        MONGO_PORT = int(os.environ['MONGO_PORT'])
+    else:
+        MONGO_PORT = None
+    if 'MONGO_HOST' in os.environ:
+        MONGO_HOST = os.environ['MONGO_HOST']
+    else:
+        MONGO_HOST = None
+    return MONGO_HOST, MONGO_PORT
+
+
+def get_mongo_client(db, col):
+    MONGO_HOST, MONGO_PORT = get_mongo()
+    return MongoClient(host=MONGO_HOST, port=MONGO_PORT)[db][col]
+
+
+MONGO_HOST, MONGO_PORT = get_mongo()
+
 
 def zip_files(files):
     # TODO fix the temporary archive
@@ -283,7 +295,7 @@ def update_one(db, col, query, doc, upsert=False):
     validate_document(doc)
     validate_document(query)
 
-    collection = MongoClient(host=MONGO_HOST, port=MONGO_PORT)[db][col]
+    collection = get_mongo_client(db, col)
     res = list(collection.find(query))
     doc["timestamp"] = time.time()
     if len(res) == 0 and upsert is True:

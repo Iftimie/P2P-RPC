@@ -1,0 +1,9 @@
+Scenario is the following:
+Only client and broker exist
+
+Client pushes a request to broker
+Client does not wait for answer
+Client deletes the local database
+Client makes an identical request to broker.
+
+The result should be that broker should contain only one item

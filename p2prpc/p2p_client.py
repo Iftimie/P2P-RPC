@@ -154,111 +154,6 @@ def get_remote_future(p2pclientfunction, p2pclientarguments):
     return p2pclientarguments
 
 
-class Future:
-
-    def __init__(self, p2pclientfunction, p2pclientarguments):
-        self.p2pclientfunction = p2pclientfunction
-        self.p2pclientarguments = p2pclientarguments
-
-    def get(self, timeout=future_timeout):
-        logger = logging.getLogger(__name__)
-
-        count_time = 0
-        while any(self.p2pclientarguments.p2parguments.outputs[k] is None
-                  for k in self.p2pclientfunction.p2pfunction.expected_return_keys
-                  if k != 'error'):
-            logger.info("Not done yet " + str(self.p2pclientarguments.p2parguments.args_identifier))
-            self.p2pclientarguments = get_remote_future(self.p2pclientfunction, self.p2pclientarguments)
-            if 'error' in self.p2pclientarguments.p2parguments.outputs and \
-                    self.p2pclientarguments.p2parguments.outputs['error'] != None:
-                document = self.p2pclientarguments.object2doc()
-                logger.error(f"Error while executing function for document {document}")
-                raise ClientFunctionError(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
-            time.sleep(future_sleeptime)
-            count_time += future_sleeptime
-            if count_time > timeout:
-                logger.error(f"Waiting time exceeded for document {self.p2pclientarguments.object2doc()}")
-                raise ClientFutureTimeoutError(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
-        logger.info(f"{self.p2pclientarguments.p2parguments.args_identifier} finished")
-        return self.p2pclientarguments.p2parguments.outputs
-
-    def terminate(self):
-        filter_ = {"identifier": self.p2pclientarguments.p2parguments.args_identifier,
-                   "remote_identifier": self.p2pclientarguments.remote_args_identifier}
-        frozenset_filter = frozenset(filter_.items())
-
-        if frozenset_filter in self.p2pclientfunction.running_jobs:
-            if self.p2pclientfunction.running_jobs[frozenset_filter][0].is_alive():
-                self.p2pclientfunction.running_jobs[frozenset_filter][0].terminate()
-                del self.p2pclientfunction.running_jobs[frozenset_filter]
-
-        search_filter = {"$or": [{"identifier": self.p2pclientarguments.p2parguments.args_identifier},
-                                 {"identifier": self.p2pclientarguments.remote_args_identifier}]}
-        terminate_remote_func(self.p2pclientarguments.ip, self.p2pclientarguments.port,
-                              self.p2pclientfunction.p2pfunction.db_name,
-                              self.p2pclientfunction.p2pfunction.db_collection,
-                              self.p2pclientfunction.p2pfunction.function_name,
-                              search_filter,
-                              self.p2pclientfunction.p2pfunction.crypt_pass)
-
-        # wait termination on worker
-        max_trials = 10
-        while True:
-            if max_trials == 0:
-                raise ClientUnableFunctionTermination(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
-            res = check_function_termination(self.p2pclientarguments.ip, self.p2pclientarguments.port,
-                                             self.p2pclientfunction.p2pfunction.db_name,
-                                             self.p2pclientfunction.p2pfunction.db_collection,
-                                             self.p2pclientfunction.p2pfunction.function_name,
-                                             search_filter,
-                                             self.p2pclientfunction.p2pfunction.crypt_pass)
-            if res.json()['status'] is True:
-                break
-            time.sleep(3)
-            max_trials-=1
-
-    def restart(self):
-        logger = logging.getLogger(__name__)
-        self.terminate()
-        search_filter = {"$or": [{"identifier": self.p2pclientarguments.p2parguments.args_identifier},
-                                 {"identifier": self.p2pclientarguments.remote_args_identifier}]}
-        call_remote_func(self.p2pclientarguments.ip, self.p2pclientarguments.port,
-                         self.p2pclientfunction.p2pfunction.db_name,
-                         self.p2pclientfunction.p2pfunction.db_collection,
-                         self.p2pclientfunction.p2pfunction.function_name,
-                         search_filter,
-                         self.p2pclientfunction.p2pfunction.crypt_pass)
-        logger.info(f"Function restarted for filter {search_filter}")
-
-
-    def delete(self):
-        self.terminate()
-
-        search_filter = {"$or": [{"identifier": self.p2pclientarguments.p2parguments.args_identifier},
-                                 {"identifier": self.p2pclientarguments.remote_args_identifier}]}
-        delete_remote_func(self.p2pclientarguments.ip, self.p2pclientarguments.port,
-                         self.p2pclientfunction.p2pfunction.db_name,
-                         self.p2pclientfunction.p2pfunction.db_collection,
-                         self.p2pclientfunction.p2pfunction.function_name,
-                         search_filter,
-                         self.p2pclientfunction.p2pfunction.crypt_pass)
-
-        # wait deletion on both worker and on brokerworker
-        max_trials = 10
-        while True:
-            if max_trials == 0:
-                raise ClientUnableFunctionDeletion(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
-            res = check_function_deletion(self.p2pclientarguments.ip, self.p2pclientarguments.port,
-                         self.p2pclientfunction.p2pfunction.db_name,
-                         self.p2pclientfunction.p2pfunction.db_collection,
-                         self.p2pclientfunction.p2pfunction.function_name,
-                         search_filter,
-                         self.p2pclientfunction.p2pfunction.crypt_pass)
-            if res.json()['status'] is True:
-                break
-            time.sleep(3)
-
-
 class P2PClientArguments:
     def __init__(self, kwargs, expected_return_keys):
         self.p2parguments = P2PArguments(list(kwargs.keys()), expected_return_keys)
@@ -410,37 +305,38 @@ class P2PClientFunction:
 
         nodes = [str(ip) + ":" + str(port)]
 
-        # try:
-        #     # TODO try to check if the file is already present on remote server. this is a stupid way.
-        #     p2p_insert_one(self.p2pfunction.db_name, self.p2pfunction.db_collection,
-        #                    serializable_document, nodes,
-        #                    current_address_func=partial(self_is_reachable, self.local_port),
-        #                    password=self.p2pfunction.crypt_pass, do_upload=False)
-        #     hint_file_keys = [k for k in self.p2pfunction.expected_return_keys if
-        #                       self.p2pfunction.args_interpreter[k] == io.IOBase]
-        #     p2p_pull_update_one(
-        #         self.p2pfunction.db_name,
-        #         self.p2pfunction.db_collection, filter_,
-        #         self.p2pfunction.expected_return_keys,
-        #         deserializer=partial(deserialize_doc_from_net,
-        #                              up_dir=self.updir,
-        #                              key_interpreter=self.p2pfunction.args_interpreter),
-        #         hint_file_keys=hint_file_keys,
-        #         password=self.p2pfunction.crypt_pass)
-        #
-        #     p2pclientarguments = self.load_arguments_from_db(filter_)
-        #
-        #     if not any(p2pclientarguments.p2parguments.outputs[k] is None
-        #         for k in self.p2pfunction.expected_return_keys
-        #         if k != 'error'):
-        #         print("GOOOOOOOOOOOOOOOOT HEREE")
-        #         return
-        #     print("asdasdasdasdasd", p2pclientarguments.object2doc())
-        #     exit()
-        #
-        # except Exception as e:
-        #     print(e)
-        #     pass
+        try:
+            # TODO try to check if the file is already present on remote server. this is a stupid way.
+            p2p_insert_one(self.p2pfunction.db_name, self.p2pfunction.db_collection,
+                           serializable_document, nodes,
+                           current_address_func=partial(self_is_reachable, self.local_port),
+                           password=self.p2pfunction.crypt_pass, do_upload=False)
+            hint_file_keys = [k for k in self.p2pfunction.expected_return_keys if
+                              self.p2pfunction.args_interpreter[k] == io.IOBase]
+            p2p_pull_update_one(
+                self.p2pfunction.db_name,
+                self.p2pfunction.db_collection, {"$or": [{"identifier": filter_['identifier']},
+                                                         {"identifier": filter_['remote_identifier']}]},
+                self.p2pfunction.expected_return_keys,
+                deserializer=partial(deserialize_doc_from_net,
+                                     up_dir=self.updir,
+                                     key_interpreter=self.p2pfunction.args_interpreter),
+                hint_file_keys=hint_file_keys,
+                password=self.p2pfunction.crypt_pass)
+
+            p2pclientarguments = self.load_arguments_from_db(filter_)
+
+            if not any(p2pclientarguments.p2parguments.outputs[k] is None
+                for k in self.p2pfunction.expected_return_keys
+                if k != 'error'):
+                print("GOOOOOOOOOOOOOOOOT HEREE")
+                return
+            print("asdasdasdasdasd", p2pclientarguments.object2doc())
+            exit()
+
+        except Exception as e:
+            print(e)
+            pass
 
         p2p_insert_one( self.p2pfunction.db_name, self.p2pfunction.db_collection,
                        serializable_document, nodes,
@@ -488,6 +384,111 @@ class P2PClientFunction:
                 return True
         else:
             return False
+
+
+class Future:
+
+    def __init__(self, p2pclientfunction: P2PClientFunction, p2pclientarguments: P2PClientArguments, upload_job=None):
+        self.p2pclientfunction = p2pclientfunction
+        self.p2pclientarguments = p2pclientarguments
+        self.upload_job = upload_job
+
+    def get(self, timeout=future_timeout):
+        logger = logging.getLogger(__name__)
+
+        count_time = 0
+        while any(self.p2pclientarguments.p2parguments.outputs[k] is None
+                  for k in self.p2pclientfunction.p2pfunction.expected_return_keys
+                  if k != 'error'):
+            logger.info("Not done yet " + str(self.p2pclientarguments.p2parguments.args_identifier))
+            self.p2pclientarguments = get_remote_future(self.p2pclientfunction, self.p2pclientarguments)
+            if 'error' in self.p2pclientarguments.p2parguments.outputs and \
+                    self.p2pclientarguments.p2parguments.outputs['error'] != None:
+                document = self.p2pclientarguments.object2doc()
+                logger.error(f"Error while executing function for document {document}")
+                raise ClientFunctionError(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
+            time.sleep(future_sleeptime)
+            count_time += future_sleeptime
+            if count_time > timeout:
+                logger.error(f"Waiting time exceeded for document {self.p2pclientarguments.object2doc()}")
+                raise ClientFutureTimeoutError(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
+        logger.info(f"{self.p2pclientarguments.p2parguments.args_identifier} finished")
+        return self.p2pclientarguments.p2parguments.outputs
+
+    def terminate(self):
+        filter_ = {"identifier": self.p2pclientarguments.p2parguments.args_identifier,
+                   "remote_identifier": self.p2pclientarguments.remote_args_identifier}
+        frozenset_filter = frozenset(filter_.items())
+
+        if frozenset_filter in self.p2pclientfunction.running_jobs:
+            if self.p2pclientfunction.running_jobs[frozenset_filter][0].is_alive():
+                self.p2pclientfunction.running_jobs[frozenset_filter][0].terminate()
+                del self.p2pclientfunction.running_jobs[frozenset_filter]
+
+        search_filter = {"$or": [{"identifier": self.p2pclientarguments.p2parguments.args_identifier},
+                                 {"identifier": self.p2pclientarguments.remote_args_identifier}]}
+        terminate_remote_func(self.p2pclientarguments.ip, self.p2pclientarguments.port,
+                              self.p2pclientfunction.p2pfunction.db_name,
+                              self.p2pclientfunction.p2pfunction.db_collection,
+                              self.p2pclientfunction.p2pfunction.function_name,
+                              search_filter,
+                              self.p2pclientfunction.p2pfunction.crypt_pass)
+
+        # wait termination on worker
+        max_trials = 10
+        while True:
+            if max_trials == 0:
+                raise ClientUnableFunctionTermination(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
+            res = check_function_termination(self.p2pclientarguments.ip, self.p2pclientarguments.port,
+                                             self.p2pclientfunction.p2pfunction.db_name,
+                                             self.p2pclientfunction.p2pfunction.db_collection,
+                                             self.p2pclientfunction.p2pfunction.function_name,
+                                             search_filter,
+                                             self.p2pclientfunction.p2pfunction.crypt_pass)
+            if res.json()['status'] is True:
+                break
+            time.sleep(3)
+            max_trials-=1
+
+    def restart(self):
+        logger = logging.getLogger(__name__)
+        self.terminate()
+        search_filter = {"$or": [{"identifier": self.p2pclientarguments.p2parguments.args_identifier},
+                                 {"identifier": self.p2pclientarguments.remote_args_identifier}]}
+        call_remote_func(self.p2pclientarguments.ip, self.p2pclientarguments.port,
+                         self.p2pclientfunction.p2pfunction.db_name,
+                         self.p2pclientfunction.p2pfunction.db_collection,
+                         self.p2pclientfunction.p2pfunction.function_name,
+                         search_filter,
+                         self.p2pclientfunction.p2pfunction.crypt_pass)
+        logger.info(f"Function restarted for filter {search_filter}")
+
+    def delete(self):
+        self.terminate()
+
+        search_filter = {"$or": [{"identifier": self.p2pclientarguments.p2parguments.args_identifier},
+                                 {"identifier": self.p2pclientarguments.remote_args_identifier}]}
+        delete_remote_func(self.p2pclientarguments.ip, self.p2pclientarguments.port,
+                         self.p2pclientfunction.p2pfunction.db_name,
+                         self.p2pclientfunction.p2pfunction.db_collection,
+                         self.p2pclientfunction.p2pfunction.function_name,
+                         search_filter,
+                         self.p2pclientfunction.p2pfunction.crypt_pass)
+
+        # wait deletion on both worker and on brokerworker
+        max_trials = 10
+        while True:
+            if max_trials == 0:
+                raise ClientUnableFunctionDeletion(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
+            res = check_function_deletion(self.p2pclientarguments.ip, self.p2pclientarguments.port,
+                         self.p2pclientfunction.p2pfunction.db_name,
+                         self.p2pclientfunction.p2pfunction.db_collection,
+                         self.p2pclientfunction.p2pfunction.function_name,
+                         search_filter,
+                         self.p2pclientfunction.p2pfunction.crypt_pass)
+            if res.json()['status'] is True:
+                break
+            time.sleep(3)
 
 
 class ServerThread(threading.Thread):
@@ -591,7 +592,7 @@ class P2PClientApp(P2PFlaskApp):
                 filter_ = {"identifier": p2pclientarguments.p2parguments.args_identifier,
                            "remote_identifier": p2pclientarguments.remote_args_identifier}
                 p2pclientfunction.running_jobs[frozenset(filter_.items())] = (process, p2pclientarguments)
-                return Future(p2pclientfunction, p2pclientarguments)
+                return Future(p2pclientfunction, p2pclientarguments, upload_job=process)
 
             return wrap
 
