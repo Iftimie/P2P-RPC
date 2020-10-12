@@ -48,21 +48,17 @@ def find_response_with_work(db, collection, func_name, password):
         try:
             service_hostip = requests.get('http://{}/actual_service_ip'.format(broker_address),
                                           headers={'Authorization': password}).json()['service_ip']
-            logger.info("SERVICE HOST IP" + (str(service_hostip)))
             bookkeeper_port = broker_address.split(":")[1]
-            logger.info("!!!!!bookkeeper_port " + (str(bookkeeper_port)))
             service_port = str(int(bookkeeper_port) - 1) # TODO there is a distinction between bookkeeper port and actual server port.
 
             url = 'http://{}:{}/search_work/{}/{}/{}'.format(service_hostip, service_port, db, collection, func_name)
 
             res = requests.post(url, headers={"Authorization": password})
-            logger.info("!!!!!RESssss " + (str(res)))
 
             if isinstance(res.json, collections.Callable):
                 returned_json = res.json()  # from requests lib
             else: # is property
                 returned_json = res.json  # from Flask test client
-            logger.info("!!!!!RESssss " + (str(returned_json)))
             if returned_json and 'filter' in returned_json:
                 logger.info("Found work from {}".format(broker_address))
                 res_broker_ip, res_broker_port = service_hostip, service_port

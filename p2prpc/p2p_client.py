@@ -63,17 +63,12 @@ def select_lru_worker(p2pfunction):
         try:
             lru_bookkeeper_host, lru_bookkeeper_port = res[0]['address'].split(":") # TODO same thing as below
 
-
-            logger.info(f"plmplmplmplmplmplmplmplmplmplmplmplm {f'http://{lru_bookkeeper_host}:{lru_bookkeeper_port}/actual_service_ip'}")
             service_hostip = requests.get(f'http://{lru_bookkeeper_host}:{lru_bookkeeper_port}/actual_service_ip',
                                           headers={'Authorization': crypt_pass}).json()['service_ip']
             service_port = str(int(lru_bookkeeper_port) - 1) # TODO there is a distinction between bookkeeper port and actual server port.
             # server port is bookeeper_port -1
 
             addr = f"{service_hostip}:{service_port}"
-
-            logger.info(f"plmplmplmplmplmplmplmplmplmplmplmplm {addr}")
-            logger.info(f"CRYPT PASS {crypt_pass}")
 
             logger.info(requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': crypt_pass}))
             worker_functions = requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': crypt_pass}).json()
@@ -510,7 +505,9 @@ class ServerThread(threading.Thread):
 class P2PClientApp(P2PFlaskApp):
 
     def __init__(self, discovery_ips_file, cache_path, local_port=5000,  password=""):
-        configure_logger("client", module_level_list=[(__name__, 'DEBUG')])
+        if not os.path.exists(cache_path):
+            os.mkdir(cache_path)
+        configure_logger(os.path.join(cache_path, "client"), module_level_list=[(__name__, 'DEBUG')])
         super(P2PClientApp, self).__init__(__name__, local_port=local_port, discovery_ips_file=discovery_ips_file,
                                                  cache_path=cache_path, password=password)
         self.roles.append("client")
