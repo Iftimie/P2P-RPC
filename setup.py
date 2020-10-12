@@ -12,12 +12,13 @@ setuptools.setup(
         'flask',
         'pymongo',
         'multipledispatch',
-        'dill',
+        'dill==0.3.1.1',
         'varint',
         'mmh3',
         'passlib',
         'requests',
         'deprecated',
+        'psutil',
       ],
 
     keywords=['object', 'detection', 'truck']

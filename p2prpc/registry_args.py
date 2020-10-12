@@ -246,6 +246,10 @@ bytes_hasher = {int: lambda value: mmh3.hash_bytes(struct.pack("i", value)),
 
 
 def hash_kwargs(doc):
+    """
+    Create a hash from the values of a document.
+    TODO maybe add the keys too?
+    """
     acc = b''
     for k in sorted(doc.keys()):
         v = doc[k]
@@ -276,3 +280,8 @@ def remove_values_from_doc(doc):
             value_remover[cls_finder(v)](v)
         except Exception as e:
             logger.warning("Key {} was not properly deleted".format(k))
+
+    # TODO refactor this somehow
+    for k in doc:
+        if "tmpfile" in k:
+            os.remove(doc[k])

@@ -1,0 +1,2 @@
+broker-discovery:5002
+

@@ -1,0 +1,2 @@
+include p2prpc/code_generation/Dockerfile
+include p2prpc/requirements.txt
