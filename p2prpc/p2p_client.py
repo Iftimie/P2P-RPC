@@ -16,7 +16,7 @@ import inspect
 from .globals import requests, future_timeout, future_sleeptime
 from .registry_args import hash_kwargs, db_encoder
 from .p2p_brokerworker import check_remote_identifier, check_function_termination, check_function_deletion
-from .p2pdata import find
+from .p2pdata import find, update_one
 from werkzeug.serving import make_server
 from .base import configure_logger
 import os
@@ -29,6 +29,8 @@ from .errors import ClientNoBrokerFound, ClientFunctionDifferentBytecode, Client
 import pymongo
 from pymongo import MongoClient
 from .registry_args import remove_values_from_doc
+import pickle
+import tempfile
 import traceback
 
 if 'MONGO_PORT' in os.environ:
@@ -114,6 +116,56 @@ def p2p_progress_hook(curidx, endidx):
                         p2pworkerfunction.p2pfunction.db_name,
                         p2pworkerfunction.p2pfunction.db_collection, filter_, update_,
                         password=p2pworkerfunction.p2pfunction.crypt_pass)
+
+
+def default_saving_func(filepath, item):
+    pickle.dump(item, open(filepath, 'wb'))
+
+
+def p2p_save(key, item, filesuffix=".pkl", saving_func=default_saving_func):
+    actual_args = find_required_args()
+    fp = p2p_getfilepath(suffix=filesuffix)
+    document = {key: fp}
+    saving_func(fp, item)
+    p2pworkerfunction = actual_args['p2pworkerfunction']
+    filter_ = actual_args['filter_']
+    update_one(p2pworkerfunction.p2pfunction.db_name, p2pworkerfunction.p2pfunction.db_collection, filter_, document, upsert=False)
+
+
+def default_loading_func(filepath):
+    return pickle.load(open(filepath, 'rb'))
+
+
+def p2p_load(key, loading_func=default_loading_func):
+    logger = logging.getLogger(__name__)
+    actual_args = find_required_args()
+    p2pworkerfunction = actual_args['p2pworkerfunction']
+    filter_ = actual_args['filter_']
+    item = find(p2pworkerfunction.p2pfunction.db_name, p2pworkerfunction.p2pfunction.db_collection, filter_,
+                p2pworkerfunction.p2pfunction.args_interpreter)[0]
+    logger.error(str(item))
+    if key in item:
+        return loading_func(item[key])
+    else:
+        return None
+
+
+def p2p_getfilepath(suffix):
+    filepath = tempfile.mkstemp(suffix=suffix, dir=None, text=False)[1]
+    actual_args = find_required_args()
+    key = "tmpfile"
+    p2pworkerfunction = actual_args['p2pworkerfunction']
+    filter_ = actual_args['filter_']
+    item = find(p2pworkerfunction.p2pfunction.db_name, p2pworkerfunction.p2pfunction.db_collection, filter_,
+                p2pworkerfunction.p2pfunction.args_interpreter)[0]
+    count = 0
+    while key in item:
+        key += str(count)
+        count += 1
+    document = {key: filepath}
+    update_one(p2pworkerfunction.p2pfunction.db_name, p2pworkerfunction.p2pfunction.db_collection, filter_, document,
+               upsert=False)
+    return filepath
 
 
 def get_remote_future(p2pclientfunction, p2pclientarguments):
