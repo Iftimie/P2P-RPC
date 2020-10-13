@@ -76,6 +76,7 @@ def find_response_with_work(db, collection, func_name, password):
 
 
 def check_brokerworker_termination(registry_functions):
+    logger = logging.getLogger(__name__)
     for p2pworkerfunction in registry_functions.values():
         new_running_jobs = []
         db_name = p2pworkerfunction.p2pfunction.db_name
@@ -95,6 +96,8 @@ def check_brokerworker_termination(registry_functions):
                     # don't delete the data here.
                     p2p_push_update_one(db_name, db_collection, search_filter,
                                         {"started": 'terminated', 'kill_clientworker': False}, password=p2pworkerfunction.p2pfunction.crypt_pass)
+                    process.terminate()
+                    logger.info("Terminated process: "+str(process))
                 else:
                     new_running_jobs.append((process, p2pworkerarguments))
         p2pworkerfunction.running_jobs = new_running_jobs

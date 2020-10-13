@@ -25,9 +25,10 @@ from .registry_args import kicomp
 from .bookkeeper import update_function, initial_discovery
 from .errors import ClientNoBrokerFound, ClientFunctionDifferentBytecode, ClientFunctionError, ClientFutureTimeoutError, \
     ClientUnableFunctionTermination, ClientUnableFunctionDeletion, ClientP2PFunctionInvalidArguments, \
-    ClientHashCollision
+    ClientHashCollision, Broker2ClientIdentifierNotFound
 import pymongo
 from pymongo import MongoClient
+from .registry_args import remove_values_from_doc
 import traceback
 
 if 'MONGO_PORT' in os.environ:
@@ -378,6 +379,17 @@ class P2PClientFunction:
         else:
             return False
 
+    def remove_arguments_from_db(self, p2pworkerarguments):
+
+        remove_values_from_doc(p2pworkerarguments.object2doc())
+
+        filter_ = {"identifier": p2pworkerarguments.p2parguments.args_identifier,
+                   'remote_identifier': p2pworkerarguments.remote_args_identifier}
+
+        client = MongoClient(host=MONGO_HOST, port=MONGO_PORT)[self.p2pfunction.db_name][
+            self.p2pfunction.db_collection]
+        client.delete_one(filter_)
+        pass
 
 class Future:
 
@@ -409,6 +421,8 @@ class Future:
         return self.p2pclientarguments.p2parguments.outputs
 
     def terminate(self):
+        logger = logging.getLogger(__name__)
+
         filter_ = {"identifier": self.p2pclientarguments.p2parguments.args_identifier,
                    "remote_identifier": self.p2pclientarguments.remote_args_identifier}
         frozenset_filter = frozenset(filter_.items())
@@ -432,16 +446,22 @@ class Future:
         while True:
             if max_trials == 0:
                 raise ClientUnableFunctionTermination(self.p2pclientfunction.p2pfunction, self.p2pclientarguments.p2parguments)
-            res = check_function_termination(self.p2pclientarguments.ip, self.p2pclientarguments.port,
-                                             self.p2pclientfunction.p2pfunction.db_name,
-                                             self.p2pclientfunction.p2pfunction.db_collection,
-                                             self.p2pclientfunction.p2pfunction.function_name,
-                                             search_filter,
-                                             self.p2pclientfunction.p2pfunction.crypt_pass)
-            if res.json()['status'] is True:
+            try:
+                res = check_function_termination(self.p2pclientarguments.ip, self.p2pclientarguments.port,
+                                                 self.p2pclientfunction.p2pfunction.db_name,
+                                                 self.p2pclientfunction.p2pfunction.db_collection,
+                                                 self.p2pclientfunction.p2pfunction.function_name,
+                                                 search_filter,
+                                                 self.p2pclientfunction.p2pfunction.crypt_pass)
+                print(res.json()['status'])
+                if res.json()['status'] is True:
+                    break
+            except Broker2ClientIdentifierNotFound:
+                logger.info("Identifier not found on broker. Uploading job must have been killed before finishing.")
                 break
             time.sleep(3)
             max_trials-=1
+            logger.info("Still checking function termination")
 
     def restart(self):
         logger = logging.getLogger(__name__)
@@ -457,6 +477,8 @@ class Future:
         logger.info(f"Function restarted for filter {search_filter}")
 
     def delete(self):
+        # TODO. if terminate is called first, then delete. it should work
+        # basically there are 2 terminate calls and a delete call
         self.terminate()
 
         search_filter = {"$or": [{"identifier": self.p2pclientarguments.p2parguments.args_identifier},
@@ -480,6 +502,7 @@ class Future:
                          search_filter,
                          self.p2pclientfunction.p2pfunction.crypt_pass)
             if res.json()['status'] is True:
+                self.p2pclientfunction.remove_arguments_from_db(self.p2pclientarguments)
                 break
             time.sleep(3)
 

@@ -252,6 +252,12 @@ def route_terminate_function(p2pbrokerfunction):
     p2pbrokerarguments = p2pbrokerfunction.load_arguments_from_db(filter)
     if p2pbrokerarguments is None:
         return make_response("Filter not found {} on broker".format(filter), 404)
+    # TODO check if the function is not already terminated. If it is already terminated, and this code here will update kill_clientworker to True,
+    #  the second call to check_function_call_termination will return False because it is terminated but kill_clientworker is on True
+    #  also I should decide what happens when a function call is not properly terminated??
+    if p2pbrokerarguments.started == 'terminated':
+        logger.info("Request for already terminated function call")
+        return make_response("ok", 200)
     p2pbrokerarguments.kill_clientworker = True
     p2pbrokerfunction.update_arguments_in_db(filter, ['kill_clientworker'], p2pbrokerarguments)
     # must be a worker that is doing the job
@@ -273,12 +279,16 @@ def route_delete_function(p2pbrokerfunction):
 
 
 def route_check_function_termination(p2pbrokerfunction):
+    logger = logging.getLogger(__name__)
     filter = loads(request.form['filter_json'])
     p2pbrokerarguments = p2pbrokerfunction.load_arguments_from_db(filter)
     if p2pbrokerarguments is None:
+        logger.info("GEEEEEEEEEEEEETHS HEREEE")
         return make_response("Filter not found {} on broker".format(filter), 404)
 
+    logger.info(p2pbrokerarguments.started + str(p2pbrokerarguments.kill_clientworker) + str(type(p2pbrokerarguments.kill_clientworker)))
     if p2pbrokerarguments.started == 'terminated' and p2pbrokerarguments.kill_clientworker is False:
+        logger.info("RETURNS TRUE STATUS")
         return jsonify({"status": True})
     else:
         return jsonify({"status": False})

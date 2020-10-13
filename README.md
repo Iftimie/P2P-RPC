@@ -66,7 +66,7 @@ After running the command a new client/ directory should be generated, and insid
 
 In our client code we can use this function in a distributed fashion in the following way:
 
-`client/client.py`
+`client/clientapp.py`
 ```python
 from p2prpc.p2p_client import create_p2p_client_app
 from function import p2prpc_analyze_large_file
@@ -85,9 +85,6 @@ print(res.get())
 
 client_app.background_server.shutdown()
 ```
-
-
-In total there are 6 files to declare when running all 3 nodes on the same machine. Not great, not terrible. 
 
 #### Additional function features
 When having long running functions, we may want to know about their progress. Thus we can import p2p_progress_hook and call it with current index and end index. The result will be a progress key in database with range 0-100%

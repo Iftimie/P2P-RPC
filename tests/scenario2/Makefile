@@ -28,7 +28,6 @@ services:
 	sudo docker-compose -f worker/worker.docker-compose.yml up -d
 	@$(MAKE) -f $(THIS_FILE) checkservices
 
-
 delete:
 	sudo docker-compose -f broker/broker.docker-compose.yml stop
 	sudo docker-compose -f broker/broker.docker-compose.yml rm -f
@@ -36,12 +35,10 @@ delete:
 	sudo docker-compose -f client/client.docker-compose.yml rm -f
 	sudo docker-compose -f worker/worker.docker-compose.yml stop
 	sudo docker-compose -f worker/worker.docker-compose.yml rm -f
-	sudo rm -R broker
+
 	sudo rm -R worker
 	sudo rm -R client/clientdb
 	sudo rm -R client/client.docker-compose.yml || true
-	sudo rm client_errors.log || true
-	sudo rm  client_info.log || true
 
 checkservices:
 	@sudo printf 'mongo-client  '; sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo-client
@@ -57,6 +54,13 @@ test:
 	export MONGO_PORT=27017; \
 	export PYTHONPATH=$$PYTHONPATH:./; \
 	python client/clientapp.py
+
+test2:
+	@$(MAKE) -f $(THIS_FILE) cleandbs
+	@export MONGO_HOST=$(shell sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo-client); \
+	export MONGO_PORT=27017; \
+	export PYTHONPATH=$$PYTHONPATH:./; \
+	python client/clientapp2.py
 
 cleandbs:
 	@export MONGO_HOST=$(shell sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo-client); \
