@@ -355,7 +355,7 @@ class P2PFlaskApp(Flask):
 
         self.route("/echo", methods=['GET'])(self.pass_req_dec(echo))
 
-    def add_to_super_register(self, p2pfunction: P2PFunction):
+    def add_to_super_register(self, p2pfunction: P2PFunction): # TODO actually the received p2pfunction is a separate class that does not inherit from P2Pfunction but does composition
         if p2pfunction.function_name in self.registry_functions:
             raise ValueError(f"Function {p2pfunction.__name__} already registered")
         self.registry_functions[p2pfunction.function_name] = p2pfunction

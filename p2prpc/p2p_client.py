@@ -232,10 +232,14 @@ class P2PClientArguments:
 class P2PClientFunction:
     def __init__(self, original_function: Callable,  crypt_pass, local_port, cache_path):
         self.p2pfunction = P2PFunction(original_function,  crypt_pass)
-        self.updir = os.path.join(cache_path, self.p2pfunction.db_name, self.p2pfunction.db_collection)  # same as in worker
+        self.updir = os.path.join(cache_path, self.p2pfunction.db_name, self.p2pfunction.db_collection)  #  same as in worker
         self.local_port = local_port
         self.running_jobs = dict()
         self.__salt_pepper_identifier = 1
+
+    @property
+    def function_name(self):
+        return self.p2pfunction.function_name
 
     def load_arguments_from_db(self, filter_):
         items = find( self.p2pfunction.db_name, self.p2pfunction.db_collection, filter_,
@@ -620,7 +624,7 @@ class P2PClientApp(P2PFlaskApp):
 
         def inner_decorator(f):
             p2pclientfunction = P2PClientFunction(f,  self.crypt_pass, self.local_port, self.cache_path)
-            self.add_to_super_register(p2pclientfunction.p2pfunction)
+            self.add_to_super_register(p2pclientfunction)
 
             os.makedirs(p2pclientfunction.updir, exist_ok=True) # same as in worker
 
