@@ -29,14 +29,25 @@ def get_p2p_functions(filename):
     return functions
 
 
+def create_volumes_string(volumes, apptype):
+    if os.path.exists("install_deps.sh"):
+        volumes = volumes + (os.path.abspath("install_deps.sh"),) # TODO. this is stupid. there should simply be another dockerfile available for modification. too much time is wasted by installing everytime the dependencies
+    volume_string = []
+    for vol in volumes:
+        last_path = os.path.split(vol)[-1]
+        newline = '      - ' + os.path.abspath(vol) + ":/app/"+apptype+"/"+last_path
+        volume_string.append(newline)
+    return '\n'.join(volume_string)
+
 @cli.command()
 @click.argument('filename')
-@click.argument('password', default='super secret password')
-def generate_broker(filename, password):
+@click.option('--password', default='super secret password')
+@click.option('--volumes', nargs=0)
+@click.argument('volumes', nargs=-1)
+def generate_broker(filename, password, volumes):
     click.echo('Code generation for broker started')
     if not os.path.exists("broker"):
         os.mkdir("broker")
-
 
     module_name = filename.split('.')[0]
     updated_broker_script_path = "broker/brokerapp.py"
@@ -49,12 +60,13 @@ def generate_broker(filename, password):
     p2prpc_package_path = os.path.dirname(p2prpc.__file__)
     updated_broker_script_path = os.path.abspath(updated_broker_script_path)
     filepath = os.path.abspath(filename)
-    print(filepath)
     with open("broker/broker.docker-compose.yml", "w") as f:
+        additional_volumes = create_volumes_string(volumes, 'broker')
         updated_dockercompose_string = dockercompose_string.format(p2prpc_package_path=p2prpc_package_path,
                                                                    super_secret_password=password,
                                                                    updated_broker_script_path=updated_broker_script_path,
-                                                                   current_function_file_path=filepath)
+                                                                   current_function_file_path=filepath,
+                                                                   additional_volumes=additional_volumes)
         f.write(updated_dockercompose_string)
 
     click.echo('Code generation for broker finished')
@@ -96,8 +108,10 @@ def generate_client(filename, networkdiscovery, password, overwrite):
 @cli.command()
 @click.argument('filename')
 @click.argument('networkdiscovery')
-@click.argument('password', default='super secret password')
-def generate_worker(filename, networkdiscovery, password):
+@click.option('--password', default='super secret password')
+@click.option('--volumes', nargs=0)
+@click.argument('volumes', nargs=-1)
+def generate_worker(filename, networkdiscovery, password, volumes):
     click.echo('Code generation for worker')
     if not os.path.exists("worker"):
         os.mkdir("worker")
@@ -115,11 +129,13 @@ def generate_worker(filename, networkdiscovery, password):
     filepath = os.path.abspath(filename)
     networkdiscovery = os.path.abspath(networkdiscovery)
     with open("worker/worker.docker-compose.yml", "w") as f:
+        additional_volumes = create_volumes_string(volumes, 'worker')
         updated_dockercompose_string = worker_dockerfile_string.format(p2prpc_package_path=p2prpc_package_path,
-                                                                   super_secret_password=password,
-                                                                   worker_app_path=updated_worker_script_path,
-                                                                   network_discovery_file=networkdiscovery,
-                                                                   current_function_file_path=filepath)
+                                                                       super_secret_password=password,
+                                                                       worker_app_path=updated_worker_script_path,
+                                                                       network_discovery_file=networkdiscovery,
+                                                                       current_function_file_path=filepath,
+                                                                       additional_volumes=additional_volumes)
         f.write(updated_dockercompose_string)
 
     click.echo('Code generation for worker finished')

@@ -61,6 +61,8 @@ services:
       - {p2prpc_package_path}:/app/broker/p2prpc/
       - {updated_broker_script_path}:/app/broker/brokerapp.py
       - {current_function_file_path}:/app/function.py
+{additional_volumes}
+
     environment:
       - MONGO_PORT=27017
       - MONGO_HOST=mongo-broker
@@ -69,7 +71,7 @@ services:
       - -c
       - |
         cd /app/
-        ls -la
+        bash broker/install_deps.sh || true
         export PYTHONPATH=$$PYTHONPATH:./
         python ./broker/brokerapp.py
     networks:

@@ -60,6 +60,8 @@ services:
       - {p2prpc_package_path}:/app/p2prpc/
       - {worker_app_path}:/app/worker/workerapp.py
       - {current_function_file_path}:/app/function.py
+{additional_volumes}
+      
     environment:
       - MONGO_PORT=27017
       - MONGO_HOST=mongo-worker
@@ -68,6 +70,7 @@ services:
       - -c
       - |
         cd /app/
+        bash worker/install_deps.sh || true
         export PYTHONPATH=$$PYTHONPATH:./
         python ./worker/workerapp.py
     networks:
