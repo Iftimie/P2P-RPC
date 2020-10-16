@@ -15,6 +15,12 @@ def cli():
     pass
 
 
+def copy_and_overwrite(from_path, to_path):
+    if os.path.exists(to_path):
+        shutil.rmtree(to_path)
+    shutil.copytree(from_path, to_path)
+
+
 def get_p2p_functions(filename):
     # p2prpc generate-broker function.py
     modulecontent = open(filename).read()
@@ -43,9 +49,7 @@ def create_volumes_string(volumes, apptype):
 @cli.command()
 @click.argument('filename')
 @click.option('--password', default='super secret password')
-@click.option('--volumes', nargs=0)
-@click.argument('volumes', nargs=-1)
-def generate_broker(filename, password, volumes):
+def generate_broker(filename, password):
     click.echo('Code generation for broker started')
     if not os.path.exists("broker"):
         os.mkdir("broker")
@@ -62,8 +66,8 @@ def generate_broker(filename, password, volumes):
 
     p2prpc_package_path = os.path.dirname(p2prpc.__file__)
     # TODO once the package is stable, it should not copy anything to broker/ folder/ it should pip install p2prpc
-    if not os.path.exists('broker/p2prpc'):
-        shutil.copytree(p2prpc_package_path, 'broker/p2prpc')
+    # if not os.path.exists('broker/p2prpc'):
+    copy_and_overwrite(p2prpc_package_path, 'broker/p2prpc')
     destination_dockerfile_path = os.path.join('broker/Dockerfile')
     with open(destination_dockerfile_path, 'w') as f:
         f.write(dockerfile_string.format(p2prpc_path=p2prpc_package_path,
@@ -71,10 +75,8 @@ def generate_broker(filename, password, volumes):
                                          apptype='broker'))
     destination_dockerfile_path = os.path.abspath(destination_dockerfile_path)
 
-    updated_broker_script_path = os.path.abspath(updated_broker_script_path)
     filepath = os.path.abspath(filename)
     with open("broker/broker.docker-compose.yml", "w") as f:
-        additional_volumes = create_volumes_string(volumes, 'broker')
         updated_dockercompose_string = dockercompose_string.format(
                                                                    super_secret_password=password,
                                                                    dockerfile_path=destination_dockerfile_path,
@@ -95,6 +97,7 @@ def generate_client(filename, networkdiscovery, password, overwrite):
     if not os.path.exists("client"):
         os.mkdir("client")
 
+    sys.path.insert(0, os.getcwd())  # insert this so that any relative import done by file can be executed successfully
 
     module_name = filename.split('.')[0]
     updated_client_script_path = "client/clientapp.py"
@@ -106,10 +109,21 @@ def generate_client(filename, networkdiscovery, password, overwrite):
             f.write(updated_client_app_template)
 
     p2prpc_package_path = os.path.dirname(p2prpc.__file__)
+    # TODO once the package is stable, it should not copy anything to broker/ folder/ it should pip install p2prpc
+    # if not os.path.exists('client/p2prpc'):
+    copy_and_overwrite(p2prpc_package_path, 'client/p2prpc')
+    destination_dockerfile_path = os.path.join('client/Dockerfile')
+    with open(destination_dockerfile_path, 'w') as f:
+        f.write(dockerfile_string.format(p2prpc_path=p2prpc_package_path,
+                                         local_project=os.getcwd(),
+                                         apptype='client'))
     networkdiscovery = os.path.abspath(networkdiscovery)
+    filepath = os.path.abspath(filename)
     with open("client/client.docker-compose.yml", "w") as f:
-        updated_dockercompose_string = client_dockercompose_string.format(p2prpc_package_path=p2prpc_package_path,
+        updated_dockercompose_string = client_dockercompose_string.format(
                                                                    super_secret_password=password,
+                                                                    dockerfile_path=destination_dockerfile_path,
+                                                                    docker_context=os.path.dirname(filepath),
                                                                    network_discovery_file=networkdiscovery)
         f.write(updated_dockercompose_string)
 
@@ -121,12 +135,12 @@ def generate_client(filename, networkdiscovery, password, overwrite):
 @click.argument('filename')
 @click.argument('networkdiscovery')
 @click.option('--password', default='super secret password')
-@click.option('--volumes', nargs=0)
-@click.argument('volumes', nargs=-1)
-def generate_worker(filename, networkdiscovery, password, volumes):
+def generate_worker(filename, networkdiscovery, password):
     click.echo('Code generation for worker')
     if not os.path.exists("worker"):
         os.mkdir("worker")
+
+    sys.path.insert(0, os.getcwd())  # insert this so that any relative import done by file can be executed successfully
 
     module_name = filename.split('.')[0]
     updated_worker_script_path = "worker/workerapp.py"
@@ -137,17 +151,22 @@ def generate_worker(filename, networkdiscovery, password, volumes):
         f.write(updated_workerapp_string)
 
     p2prpc_package_path = os.path.dirname(p2prpc.__file__)
-    updated_worker_script_path = os.path.abspath(updated_worker_script_path)
+    # TODO once the package is stable, it should not copy anything to broker/ folder/ it should pip install p2prpc
+    # if not os.path.exists('worker/p2prpc'):
+    copy_and_overwrite(p2prpc_package_path, 'worker/p2prpc')
+    destination_dockerfile_path = os.path.join('worker/Dockerfile')
+    with open(destination_dockerfile_path, 'w') as f:
+        f.write(dockerfile_string.format(p2prpc_path=p2prpc_package_path,
+                                         local_project=os.getcwd(),
+                                         apptype='worker'))
+
     filepath = os.path.abspath(filename)
     networkdiscovery = os.path.abspath(networkdiscovery)
     with open("worker/worker.docker-compose.yml", "w") as f:
-        additional_volumes = create_volumes_string(volumes, 'worker')
-        updated_dockercompose_string = worker_dockerfile_string.format(p2prpc_package_path=p2prpc_package_path,
-                                                                       super_secret_password=password,
-                                                                       worker_app_path=updated_worker_script_path,
+        updated_dockercompose_string = worker_dockerfile_string.format(super_secret_password=password,
                                                                        network_discovery_file=networkdiscovery,
-                                                                       current_function_file_path=filepath,
-                                                                       additional_volumes=additional_volumes)
+                                                                       dockerfile_path=destination_dockerfile_path,
+                                                                       docker_context=os.path.dirname(filepath))
         f.write(updated_dockercompose_string)
 
     click.echo('Code generation for worker finished')

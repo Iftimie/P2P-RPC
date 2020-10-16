@@ -19,12 +19,11 @@ services:
     ports:
       - "5000:5000"
     build:
-      context: {p2prpc_package_path}
-      dockerfile: code_generation/Dockerfile
+      context: {docker_context}
+      dockerfile: {dockerfile_path}
     depends_on:
       - mongo-client
     volumes:
-      - {p2prpc_package_path}:/app/client/p2prpc/
       - {network_discovery_file}:/app/client/network_discovery_client.txt
     environment:
       - MONGO_PORT=27017

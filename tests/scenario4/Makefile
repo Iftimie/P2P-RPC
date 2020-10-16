@@ -4,30 +4,29 @@ SHELL:=/bin/bash
 THIS_FILE := $(lastword $(MAKEFILE_LIST))
 
 services:
+	# TODO group the commands into the p2prpc CLI
 	cd ../../; python setup.py install; cd tests/scenario4
 	p2prpc generate-broker function.py
 	sudo docker-compose -f broker/broker.docker-compose.yml build
 	sudo docker-compose -f broker/broker.docker-compose.yml up -d
-#
-# 	output=$$(sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' broker-discovery); \
-# 	while [[ "$$output" == "" ]]; do \
-# 		output=$$(sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' broker-discovery); \
-# 		echo $$output; \
-# 		sleep 1; \
-# 	done; \
-# 	echo $$output:5002 > 'discovery.txt'; \
-# 	cat 'discovery.txt';
-#
-# 	p2prpc generate-client function.py discovery.txt
-#
-# 	sudo docker-compose -f client/client.docker-compose.yml build
-# 	sudo docker-compose -f client/client.docker-compose.yml up -d
-#
-# 	p2prpc generate-worker function.py discovery.txt
-#
-# 	sudo docker-compose -f worker/worker.docker-compose.yml build
-# 	sudo docker-compose -f worker/worker.docker-compose.yml up -d
-# 	@$(MAKE) -f $(THIS_FILE) checkservices
+	output=$$(sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' broker-discovery); \
+	while [[ "$$output" == "" ]]; do \
+		output=$$(sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' broker-discovery); \
+		echo $$output; \
+		sleep 1; \
+	done; \
+	echo $$output:5002 > 'discovery.txt'; \
+	cat 'discovery.txt';
+
+	p2prpc generate-client function.py discovery.txt
+	sudo docker-compose -f client/client.docker-compose.yml build
+	sudo docker-compose -f client/client.docker-compose.yml up -d
+	rm -R client/p2prpc
+
+	p2prpc generate-worker function.py discovery.txt
+	sudo docker-compose -f worker/worker.docker-compose.yml build
+	sudo docker-compose -f worker/worker.docker-compose.yml up -d
+	@$(MAKE) -f $(THIS_FILE) checkservices
 
 delete:
 	sudo docker-compose -f broker/broker.docker-compose.yml kill
@@ -52,6 +51,7 @@ checkservices:
 
 test:
 	@$(MAKE) -f $(THIS_FILE) cleandbs
+	cd ../../; python setup.py install; cd tests/scenario4
 	@export MONGO_HOST=$(shell sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo-client); \
 	export MONGO_PORT=27017; \
 	export PYTHONPATH=$$PYTHONPATH:./; \

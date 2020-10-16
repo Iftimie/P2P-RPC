@@ -19,12 +19,11 @@ services:
     ports:
       - "5004:5004"
     build:
-      context: {p2prpc_package_path}
-      dockerfile: code_generation/Dockerfile
+      context: {docker_context}
+      dockerfile: {dockerfile_path}
     depends_on:
       - mongo-worker
     volumes:
-      - {p2prpc_package_path}:/app/worker/p2prpc/
       - {network_discovery_file}:/app/worker/network_discovery_worker.txt
     environment:
       - MONGO_PORT=27017
@@ -51,16 +50,11 @@ services:
     ports:
       - "5003:5003"
     build:
-      context: {p2prpc_package_path}
-      dockerfile: code_generation/Dockerfile
+      context: {docker_context}
+      dockerfile: {dockerfile_path}
     depends_on:
       - mongo-worker
       - worker-discovery
-    volumes:
-      - {p2prpc_package_path}:/app/p2prpc/
-      - {worker_app_path}:/app/worker/workerapp.py
-      - {current_function_file_path}:/app/function.py
-{additional_volumes}
       
     environment:
       - MONGO_PORT=27017

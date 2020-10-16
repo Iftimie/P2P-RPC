@@ -275,28 +275,28 @@ class P2PClientFunction:
         # TODO to prevent security issues maybe the type(arg) == declared type, not isinstance(arg, declared_type)
         """
         if len(args) != 0:
-            ClientP2PFunctionInvalidArguments(self.p2pfunction, "All arguments to a function in this p2p framework need to be specified by keyword arguments")
+            raise ClientP2PFunctionInvalidArguments(self.p2pfunction, "All arguments to a function in this p2p framework need to be specified by keyword arguments")
 
         f_param_sign = inspect.signature(self.p2pfunction.original_function).parameters
         if set(f_param_sign.keys()) != set(kwargs.keys()):
-            ClientP2PFunctionInvalidArguments(self.p2pfunction, f"Expected keys {set(f_param_sign.keys())}, received Keys {set(kwargs.keys())}")
+            raise ClientP2PFunctionInvalidArguments(self.p2pfunction, f"Expected keys {set(f_param_sign.keys())}, received Keys {set(kwargs.keys())}")
         # check that every value passed in this function has the same type as the one declared in function annotation
         for k, v in kwargs.items():
             f_param_k_annotation = f_param_sign[k].annotation
             if not isinstance(v, f_param_k_annotation):
-                ClientP2PFunctionInvalidArguments(self.p2pfunction,
+                raise ClientP2PFunctionInvalidArguments(self.p2pfunction,
                                                   f"class of value {v} for argument {k} is not the same as the annotation {f_param_k_annotation}")
         for value in P2PFunction.restricted_values:
             if value in kwargs.values():
-                ClientP2PFunctionInvalidArguments(self.p2pfunction, f"'{value}' string is a reserved value in this p2p framework. It helps "
+                raise ClientP2PFunctionInvalidArguments(self.p2pfunction, f"'{value}' string is a reserved value in this p2p framework. It helps "
                                  "identifying a file when serializing together with other arguments")
         files = [v for v in kwargs.values() if isinstance(v, io.IOBase)]
         if len(files) > 1:
-            ClientP2PFunctionInvalidArguments(self.p2pfunction,
+            raise ClientP2PFunctionInvalidArguments(self.p2pfunction,
                                               "p2p framework does not currently support sending more than one file")
         if files:
             if any(file.closed or file.mode != 'rb' or file.tell() != 0 for file in files):
-                ClientP2PFunctionInvalidArguments(self.p2pfunction,
+                raise ClientP2PFunctionInvalidArguments(self.p2pfunction,
                                                   "all files should be opened in read binary mode and pointer must be at start")
 
     def create_arguments_identifier(self, kwargs):
