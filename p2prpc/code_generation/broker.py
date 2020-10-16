@@ -21,12 +21,10 @@ services:
     ports:
       - "5002:5002"
     build:
-      context: {p2prpc_package_path}
-      dockerfile: code_generation/Dockerfile
+      context: {docker_context}
+      dockerfile: {dockerfile_path}
     depends_on:
       - mongo-broker
-    volumes:
-      - {p2prpc_package_path}:/app/broker/p2prpc/
     environment:
       - MONGO_PORT=27017
       - MONGO_HOST=mongo-broker
@@ -52,16 +50,11 @@ services:
     ports:
       - "5001:5001"
     build:
-      context: {p2prpc_package_path}
-      dockerfile: code_generation/Dockerfile
+      context: {docker_context}
+      dockerfile: {dockerfile_path}
     depends_on:
       - mongo-broker
       - broker-discovery
-    volumes:
-      - {p2prpc_package_path}:/app/broker/p2prpc/
-      - {updated_broker_script_path}:/app/broker/brokerapp.py
-      - {current_function_file_path}:/app/function.py
-{additional_volumes}
 
     environment:
       - MONGO_PORT=27017
@@ -71,7 +64,6 @@ services:
       - -c
       - |
         cd /app/
-        bash broker/install_deps.sh || true
         export PYTHONPATH=$$PYTHONPATH:./
         python ./broker/brokerapp.py
     networks:

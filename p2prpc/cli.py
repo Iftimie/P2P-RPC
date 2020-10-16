@@ -4,7 +4,8 @@ import os
 from p2prpc.code_generation.broker import dockercompose_string, broker_script
 from p2prpc.code_generation.client import client_dockercompose_string, client_app_template
 from p2prpc.code_generation.worker import worker_dockerfile_string, workerapp_string
-
+from p2prpc.code_generation.Dockerfile import dockerfile_string
+import shutil
 import collections
 import p2prpc
 
@@ -49,6 +50,8 @@ def generate_broker(filename, password, volumes):
     if not os.path.exists("broker"):
         os.mkdir("broker")
 
+    sys.path.insert(0, os.getcwd())  # insert this so that any relative import done by file can be executed successfully
+
     module_name = filename.split('.')[0]
     updated_broker_script_path = "broker/brokerapp.py"
     with open(updated_broker_script_path, "w") as f:
@@ -58,15 +61,24 @@ def generate_broker(filename, password, volumes):
         f.write(updated_broker_script)
 
     p2prpc_package_path = os.path.dirname(p2prpc.__file__)
+    # TODO once the package is stable, it should not copy anything to broker/ folder/ it should pip install p2prpc
+    if not os.path.exists('broker/p2prpc'):
+        shutil.copytree(p2prpc_package_path, 'broker/p2prpc')
+    destination_dockerfile_path = os.path.join('broker/Dockerfile')
+    with open(destination_dockerfile_path, 'w') as f:
+        f.write(dockerfile_string.format(p2prpc_path=p2prpc_package_path,
+                                         local_project=os.getcwd(),
+                                         apptype='broker'))
+    destination_dockerfile_path = os.path.abspath(destination_dockerfile_path)
+
     updated_broker_script_path = os.path.abspath(updated_broker_script_path)
     filepath = os.path.abspath(filename)
     with open("broker/broker.docker-compose.yml", "w") as f:
         additional_volumes = create_volumes_string(volumes, 'broker')
-        updated_dockercompose_string = dockercompose_string.format(p2prpc_package_path=p2prpc_package_path,
+        updated_dockercompose_string = dockercompose_string.format(
                                                                    super_secret_password=password,
-                                                                   updated_broker_script_path=updated_broker_script_path,
-                                                                   current_function_file_path=filepath,
-                                                                   additional_volumes=additional_volumes)
+                                                                   dockerfile_path=destination_dockerfile_path,
+                                                                   docker_context=os.path.dirname(filepath))
         f.write(updated_dockercompose_string)
 
     click.echo('Code generation for broker finished')
