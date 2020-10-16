@@ -56,7 +56,7 @@ def generate_broker(filename, password):
 
     sys.path.insert(0, os.getcwd())  # insert this so that any relative import done by file can be executed successfully
 
-    module_name = filename.split('.')[0]
+    module_name = filename.split('.')[0].replace('/','.').replace('\\', '.')
     updated_broker_script_path = "broker/brokerapp.py"
     with open(updated_broker_script_path, "w") as f:
         updated_broker_script = broker_script.format(module=module_name,
@@ -80,7 +80,7 @@ def generate_broker(filename, password):
         updated_dockercompose_string = dockercompose_string.format(
                                                                    super_secret_password=password,
                                                                    dockerfile_path=destination_dockerfile_path,
-                                                                   docker_context=os.path.dirname(filepath))
+                                                                   docker_context=os.getcwd())
         f.write(updated_dockercompose_string)
 
     click.echo('Code generation for broker finished')
@@ -99,7 +99,7 @@ def generate_client(filename, networkdiscovery, password, overwrite):
 
     sys.path.insert(0, os.getcwd())  # insert this so that any relative import done by file can be executed successfully
 
-    module_name = filename.split('.')[0]
+    module_name = filename.split('.')[0].replace('/','.').replace('\\', '.')
     updated_client_script_path = "client/clientapp.py"
     if not os.path.exists(updated_client_script_path) or overwrite:
         with open(updated_client_script_path, "w") as f:
@@ -123,7 +123,7 @@ def generate_client(filename, networkdiscovery, password, overwrite):
         updated_dockercompose_string = client_dockercompose_string.format(
                                                                    super_secret_password=password,
                                                                     dockerfile_path=destination_dockerfile_path,
-                                                                    docker_context=os.path.dirname(filepath),
+                                                                    docker_context=os.getcwd(),
                                                                    network_discovery_file=networkdiscovery)
         f.write(updated_dockercompose_string)
 
@@ -142,7 +142,7 @@ def generate_worker(filename, networkdiscovery, password):
 
     sys.path.insert(0, os.getcwd())  # insert this so that any relative import done by file can be executed successfully
 
-    module_name = filename.split('.')[0]
+    module_name = filename.split('.')[0].replace('/','.').replace('\\', '.')
     updated_worker_script_path = "worker/workerapp.py"
     with open(updated_worker_script_path, "w") as f:
         updated_workerapp_string = workerapp_string.format(module=module_name,
@@ -166,7 +166,7 @@ def generate_worker(filename, networkdiscovery, password):
         updated_dockercompose_string = worker_dockerfile_string.format(super_secret_password=password,
                                                                        network_discovery_file=networkdiscovery,
                                                                        dockerfile_path=destination_dockerfile_path,
-                                                                       docker_context=os.path.dirname(filepath))
+                                                                       docker_context=os.getcwd())
         f.write(updated_dockercompose_string)
 
     click.echo('Code generation for worker finished')
