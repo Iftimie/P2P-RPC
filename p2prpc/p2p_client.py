@@ -253,11 +253,10 @@ class P2PClientFunction:
     def list_all_arguments(self):
         logger = logging.getLogger(__name__)
 
-        db_name = self.p2pfunction.db_name
-        db_collection = self.p2pfunction.db_collection
         p2pclientarguments = []
         try:
-            for item in MongoClient(host=MONGO_HOST, port=MONGO_PORT)[db_name][db_collection].find({}):
+            for item in find( self.p2pfunction.db_name, self.p2pfunction.db_collection, {},
+                     self.p2pfunction.args_interpreter):
                 p2pclientargument = P2PClientArguments({k:None for k in self.p2pfunction.expected_keys},
                                                        self.p2pfunction.expected_return_keys)
                 p2pclientargument.doc2object(item)

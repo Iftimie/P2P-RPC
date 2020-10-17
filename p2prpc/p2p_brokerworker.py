@@ -113,7 +113,7 @@ class P2PBrokerArguments:
     def __init__(self, expected_keys, expected_return_keys):
         self.p2parguments = P2PArguments(expected_keys, expected_return_keys)
         self.started = None # TODO maybe this property should also stau in p2parguments
-        self.kill_clientworker = None
+        self.kill_clientworker = None # todo. these things should stay in p2pclient arguments. because the user may not wait for these events to finish
         self.delete_clientworker = None
         self.timestamp = None
         self.remote_args_identifier = None

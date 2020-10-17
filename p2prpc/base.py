@@ -127,6 +127,7 @@ class P2PArguments:
         self.expected_return_keys = expected_return_keys[:]
         self.kwargs = {k:None for k in expected_keys}
         self.outputs = {k:None for k in expected_return_keys}
+        self.timestamp = None
 
     def object2doc(self):
         """
@@ -136,9 +137,11 @@ class P2PArguments:
         function_call_properties.update(self.kwargs)
         function_call_properties.update(self.outputs)
         function_call_properties['identifier'] = self.args_identifier
+        function_call_properties['timestamp'] = self.timestamp
         return function_call_properties
 
     def doc2object(self, document):
+        self.timestamp = document['timestamp'] # should exist
         self.args_identifier = document['identifier']
         for k in self.expected_keys:
             self.kwargs[k] = document[k]

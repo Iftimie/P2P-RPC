@@ -13,3 +13,8 @@ def function_call_states(app: [P2PClientworkerApp, P2PBrokerworkerApp, P2PClient
         arguments = p2pfunction.list_all_arguments()
         all_futures.extend([Future(p2pfunction, arg) for arg in arguments])
     return all_futures
+
+
+def item_by_func_and_id(app, orig_func, identifier):
+    p2pfunction = app.registry_functions[orig_func.__name__]
+    return p2pfunction.load_arguments_from_db(filter_={"identifier": identifier})
