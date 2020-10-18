@@ -69,17 +69,39 @@ def select_lru_worker(p2pfunction):
             service_hostip = requests.get(f'http://{lru_bookkeeper_host}:{lru_bookkeeper_port}/actual_service_ip',
                                           headers={'Authorization': crypt_pass}).json()['service_ip']
             service_port = str(int(lru_bookkeeper_port) - 1) # TODO there is a distinction between bookkeeper port and actual server port.
+            # TODO do something with this shit. WTF WHY did I do that? test locally that it works with localhost.
             # server port is bookeeper_port -1
 
-            addr = f"{service_hostip}:{service_port}"
+            try:
+                addr = f"{service_hostip}:{service_port}"
 
-            logger.info(requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': crypt_pass}))
-            worker_functions = requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': crypt_pass}).json()
+                logger.info(
+                    requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': crypt_pass}))
+                worker_functions = requests.get('http://{}/registered_functions'.format(addr),
+                                                headers={'Authorization': crypt_pass}).json()
 
-            if funcname not in worker_functions or worker_functions[funcname]["bytecode"] != func_bytecode:
-                # In case there are errors here, check that you have the same version of python on all services
-                raise ClientFunctionDifferentBytecode(p2pfunction, addr)
-            break
+                if funcname not in worker_functions or worker_functions[funcname]["bytecode"] != func_bytecode:
+                    # In case there are errors here, check that you have the same version of python on all services
+                    raise ClientFunctionDifferentBytecode(p2pfunction, addr)
+                break
+            except:
+                pass
+
+            try:
+                addr = f"{lru_bookkeeper_host}:{service_port}"
+
+                logger.info(
+                    requests.get('http://{}/registered_functions'.format(addr), headers={'Authorization': crypt_pass}))
+                worker_functions = requests.get('http://{}/registered_functions'.format(addr),
+                                                headers={'Authorization': crypt_pass}).json()
+
+                if funcname not in worker_functions or worker_functions[funcname]["bytecode"] != func_bytecode:
+                    # In case there are errors here, check that you have the same version of python on all services
+                    raise ClientFunctionDifferentBytecode(p2pfunction, addr)
+                break
+            except:
+                pass
+
         except Exception as e:
             logger.info("broker unavailable {} from error {}".format(res[0]['address'], e))
             res.popleft()
