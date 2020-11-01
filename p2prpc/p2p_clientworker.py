@@ -51,19 +51,43 @@ def find_response_with_work(db, collection, func_name, password):
             bookkeeper_port = broker_address.split(":")[1]
             service_port = str(int(bookkeeper_port) - 1) # TODO there is a distinction between bookkeeper port and actual server port.
 
-            url = 'http://{}:{}/search_work/{}/{}/{}'.format(service_hostip, service_port, db, collection, func_name)
+            try:
+                url = 'http://{}:{}/search_work/{}/{}/{}'.format(service_hostip, service_port, db, collection,
+                                                                 func_name)
 
-            res = requests.post(url, headers={"Authorization": password})
+                res = requests.post(url, headers={"Authorization": password})
 
-            if isinstance(res.json, collections.Callable):
-                returned_json = res.json()  # from requests lib
-            else: # is property
-                returned_json = res.json  # from Flask test client
-            if returned_json and 'filter' in returned_json:
-                logger.info("Found work from {}".format(broker_address))
-                res_broker_ip, res_broker_port = service_hostip, service_port
-                res_json = returned_json
-                break
+                if isinstance(res.json, collections.Callable):
+                    returned_json = res.json()  # from requests lib
+                else:  # is property
+                    returned_json = res.json  # from Flask test client
+                if returned_json and 'filter' in returned_json:
+                    logger.info("Found work from {}".format(broker_address))
+                    res_broker_ip, res_broker_port = service_hostip, service_port
+                    res_json = returned_json
+                    break
+            except:
+                pass
+
+            try:
+                broker_ip = broker_address.split(':')[0]
+                url = 'http://{}:{}/search_work/{}/{}/{}'.format(broker_ip, service_port, db, collection,
+                                                                 func_name)
+                res = requests.post(url, headers={"Authorization": password})
+
+                if isinstance(res.json, collections.Callable):
+                    returned_json = res.json()  # from requests lib
+                else:  # is property
+                    returned_json = res.json  # from Flask test client
+                if returned_json and 'filter' in returned_json:
+                    logger.info("Found work from {}".format(broker_address))
+                    res_broker_ip, res_broker_port = service_hostip, service_port
+                    res_json = returned_json
+                    break
+            except:
+                pass
+
+
         except:  # except connection timeout or something like that
             logger.info("broker unavailable {}".format(broker_address))
             pass
