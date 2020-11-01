@@ -81,7 +81,7 @@ def find_response_with_work(db, collection, func_name, password):
                     returned_json = res.json  # from Flask test client
                 if returned_json and 'filter' in returned_json:
                     logger.info("Found work from {}".format(broker_address))
-                    res_broker_ip, res_broker_port = service_hostip, service_port
+                    res_broker_ip, res_broker_port = broker_ip, service_port
                     res_json = returned_json
                     break
             except:
