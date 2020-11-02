@@ -155,6 +155,7 @@ def setup_demo():
         ssh_instance_worker = ec2.Instance(instances['worker'])
     ssh_instance_broker.load()
     ssh_instance_worker.load()
+    # TODO check here that state is not shutting down
     with open("discovery.txt", 'w') as f:
         f.write(ssh_instance_broker.public_ip_address+":5002")
     print(f"At this point, you can SSH to broker {ssh_instance_broker.instance_id} "

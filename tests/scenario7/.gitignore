@@ -1,0 +1,7 @@
+client/
+broker/
+worker/
+!client/clientapp.py
+*.txt
+*.json
+*.pem

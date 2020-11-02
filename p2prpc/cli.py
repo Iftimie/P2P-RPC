@@ -1,6 +1,7 @@
 import click
 import sys
 import os
+import subprocess
 from p2prpc.code_generation.broker import dockercompose_string, broker_script
 from p2prpc.code_generation.client import client_dockercompose_string, client_app_template
 from p2prpc.code_generation.worker import worker_dockerfile_string, workerapp_string
@@ -8,7 +9,10 @@ from p2prpc.code_generation.Dockerfile import dockerfile_string
 import shutil
 import collections
 import p2prpc
+import time
+from pymongo import MongoClient
 
+SERVICE_TYPES = ['broker', 'client', 'worker']
 
 @click.group()
 def cli():
@@ -50,6 +54,12 @@ def create_volumes_string(volumes, apptype):
 @click.argument('filename')
 @click.option('--password', default='super secret password')
 def generate_broker(filename, password):
+    """
+    Generates code for the broker and builds the image using docker compose\n
+    Args:\n
+        filename: File that contains function definition\n
+        password: password used to join the p2p network\n
+    """
     click.echo('Code generation for broker started')
     if not os.path.exists("broker"):
         os.mkdir("broker")
@@ -83,8 +93,82 @@ def generate_broker(filename, password):
                                                                    docker_context=os.getcwd())
         f.write(updated_dockercompose_string)
 
+    os.system("sudo docker-compose -f broker/broker.docker-compose.yml build")
+
     click.echo('Code generation for broker finished')
-    click.echo('Run: sudo docker-compose -f broker/broker.docker-compose.yml up')
+
+
+@cli.command()
+@click.argument('service_type')
+def start(service_type):
+    assert service_type in SERVICE_TYPES
+
+    os.system(f'sudo docker-compose -f {service_type}/{service_type}.docker-compose.yml up -d')
+
+    if service_type=='broker':
+        output = subprocess.getoutput(
+            "sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' broker-discovery")
+        while output=="":
+            time.sleep(1)
+            output = subprocess.getoutput(
+                "sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' broker-discovery")
+        with open('discovery.txt', 'w') as f:
+            f.write(output+":5002")
+
+    if service_type=='client':
+        output = subprocess.getoutput(
+            "sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mongo-client")
+        with open("client/mongohost.txt", 'w') as f:
+            f.write(output)
+
+@cli.command()
+@click.argument('service_type')
+def kill(service_type):
+    assert service_type in SERVICE_TYPES
+    os.system(f'sudo docker-compose -f {service_type}/{service_type}.docker-compose.yml kill')
+
+
+@cli.command()
+@click.argument('service_type')
+def delete(service_type):
+    assert service_type in SERVICE_TYPES
+    os.system(f'sudo docker-compose -f {service_type}/{service_type}.docker-compose.yml rm -f')
+    os.system(f'sudo rm -R {service_type}')
+
+
+@cli.command()
+@click.argument('service_type')
+def log(service_type):
+    assert service_type in SERVICE_TYPES
+    os.system(f"sudo docker-compose -f {service_type}/{service_type}.docker-compose.yml logs -f {service_type}")
+
+
+@cli.command()
+@click.argument('service_type')
+def inspect_data(service_type):
+    assert service_type in SERVICE_TYPES
+    localip_mongo = subprocess.getoutput(f"sudo docker inspect -f '{{{{range .NetworkSettings.Networks}}}}{{{{.IPAddress}}}}{{{{end}}}}' mongo-{service_type}")
+    client = MongoClient(host=localip_mongo, port=27017)
+    for db in client.list_databases():
+        if db['name'] in ['admin','config','local','p2pbookdb']: continue
+        print("DB NAME", db['name'])
+        for collname in client[db['name']].list_collection_names():
+            coll = client[db['name']][collname]
+            print("COL NAME", collname)
+            print("COL CONTENTS", list(coll.find({})))
+
+
+@cli.command()
+@click.argument('service_type')
+def delete_data(service_type):
+    assert service_type in SERVICE_TYPES
+    localip_mongo = subprocess.getoutput(f"sudo docker inspect -f '{{{{range .NetworkSettings.Networks}}}}{{{{.IPAddress}}}}{{{{end}}}}' mongo-{service_type}")
+    client = MongoClient(host=localip_mongo, port=27017)
+    for db in client.list_databases():
+        if db['name'] in ['admin','config','local','p2pbookdb']: continue
+        for collname in client[db['name']].list_collection_names():
+            coll = client[db['name']][collname]
+            coll.remove()
 
 
 @cli.command()
@@ -127,8 +211,9 @@ def generate_client(filename, networkdiscovery, password, overwrite):
                                                                    network_discovery_file=networkdiscovery)
         f.write(updated_dockercompose_string)
 
+    os.system("sudo docker-compose -f client/client.docker-compose.yml build")
+    os.system("rm -R client/p2prpc")
     click.echo('Code generation for client finished')
-    click.echo('Run: sudo docker-compose -f client/client.docker-compose.yml up')
 
 
 @cli.command()
@@ -169,8 +254,8 @@ def generate_worker(filename, networkdiscovery, password):
                                                                        docker_context=os.getcwd())
         f.write(updated_dockercompose_string)
 
+    os.system("sudo docker-compose -f worker/worker.docker-compose.yml build")
     click.echo('Code generation for worker finished')
-    click.echo('Run: sudo docker-compose -f worker/worker.docker-compose.yml up')
 
 
 def main():

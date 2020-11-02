@@ -53,6 +53,11 @@ networks:
 
 client_app_template = \
 """
+import os
+import sys
+sys.path.append(os.getcwd())
+with open(os.path.join(os.path.dirname(__file__), 'mongohost.txt'), 'r') as f:
+    os.environ['MONGO_HOST'] = f.read()
 from p2prpc.p2p_client import create_p2p_client_app
 from {module} import {function}
 import os.path as osp
