@@ -5,6 +5,7 @@ import boto3
 import os
 from botocore.exceptions import ClientError
 import paramiko
+import pysftp
 import click
 import json
 client = boto3.client('ec2')
@@ -61,8 +62,10 @@ def setup_security_group(group_description):
 
     ans = client.describe_security_groups()
     secgroups = ans['SecurityGroups']
-    if len(secgroups):
-        return ec2.SecurityGroup(secgroups[0]['GroupId'])
+    if len(secgroups)==2:
+        for secgroup in secgroups:
+            if secgroup['GroupName']!='default':
+                return ec2.SecurityGroup(secgroup['GroupId'])
     else:
         try:
             default_vpc = list(ec2.vpcs.filter(
@@ -95,8 +98,7 @@ def setup_security_group(group_description):
                 'IpProtocol': 'tcp', 'FromPort': 5001, 'ToPort': 5002,
                 'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
             }, {
-                # HTTPS ingress open to anyone
-                'IpProtocol': 'icmp', 'FromPort': -1, 'ToPort': -1,
+                'IpProtocol': 'icmp', 'FromPort': 8, 'ToPort': 0,
                 'IpRanges': [{'CidrIp': '0.0.0.0/0'}]
             }])
             ip_permissions.append({
@@ -151,19 +153,17 @@ def setup_demo():
             instances = json.load(json_file)
         ssh_instance_broker = ec2.Instance(instances['broker'])
         ssh_instance_worker = ec2.Instance(instances['worker'])
-
-    return (ssh_instance_broker, ssh_instance_worker), (ssh_sec_group, ), key_pair
-
-
-def management_demo(ssh_instance):
-    ssh_instance.load()
-    print(f"At this point, you can SSH to instance {ssh_instance.instance_id} "
+    ssh_instance_broker.load()
+    ssh_instance_worker.load()
+    with open("discovery.txt", 'w') as f:
+        f.write(ssh_instance_broker.public_ip_address+":5002")
+    print(f"At this point, you can SSH to broker {ssh_instance_broker.instance_id} "
           f"at another command prompt by running")
-    print(f"\tssh -i demo-key-file.pem ubuntu@{ssh_instance.public_ip_address}")
-    os.system('chmod 400 demo-key-file.pem')
-    with open('ip.txt', 'w') as f:
-        f.write(ssh_instance.public_ip_address)
-    input("Press Enter when you're ready to continue the demo.")
+    print(f"\tssh -i demo-key-file.pem ubuntu@{ssh_instance_broker.public_ip_address}")
+    print(f"At this point, you can SSH to worker {ssh_instance_worker.instance_id} "
+          f"at another command prompt by running")
+    print(f"\tssh -i demo-key-file.pem ubuntu@{ssh_instance_worker.public_ip_address}")
+    return (ssh_instance_broker, ssh_instance_worker), (ssh_sec_group, ), key_pair
 
 
 def teardown_demo(instances):
@@ -188,40 +188,81 @@ def run_commands(c, command_list):
         else:
             print("Error in command", exit_status)
 
+def rm(sftp, path):
+    files = sftp.listdir(path)
 
-def ssh_login():
+    for f in files:
+        filepath = os.path.join(path, f)
+        try:
+            sftp.remove(filepath)
+        except IOError:
+            rm(sftp, filepath)
+
+    sftp.rmdir(path)
+
+def transfer_files(instance):
+    """
+    cert = paramiko.RSAKey.from_private_key_file('demo-key-file.pem')
+    with pysftp.Connection(ssh_instance_broker.public_ip_address, username='ubuntu', private_key=cert) as sftp:
+        if False:
+            if not sftp.exists("P2P-RPC"):
+                sftp.mkdir("P2P-RPC")
+            else:
+                rm(sftp, "P2P-RPC")
+                sftp.mkdir("P2P-RPC")
+
+            dn = os.path.dirname
+            sftp.put_r(dn(dn(dn(__file__))), 'P2P-RPC', preserve_mtime=True)
+
+    os.system('scp -i demo-key-file.pem -r {source} ubuntu@{ip}:~/'.format(source=dn(dn(dn(__file__))),
+                                                                          ip=instance.public_ip_address))
+    """
+    dn = os.path.dirname
+    import subprocess
+    res = subprocess.getoutput('scp -i demo-key-file.pem -r {source} ubuntu@{ip}:~'.format(source=dn(dn(dn(__file__))),
+                                                                          ip=instance.public_ip_address))
+    print(res)
+
+@cli.command()
+def setupbroker():
+    instances, security_groups, key_pair = setup_demo()
+    ssh_instance_broker=instances[0]
+
+    transfer_files(ssh_instance_broker)
     try:
-        cert = paramiko.RSAKey.from_private_key_file('demo-key-file.pem')
         c = paramiko.SSHClient()
+        cert = paramiko.RSAKey.from_private_key_file('demo-key-file.pem')
         c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        with open('ip.txt', 'r') as f:
-            ip = f.read()
-        c.connect(hostname=ip, username='ubuntu', pkey=cert)
-        run_commands(c, ['git clone https://github.com/Iftimie/TruckMonitoringSystem.git',
-                         'cd TruckMonitoringSystem; git checkout develop',
-                         'cd TruckMonitoringSystem; git pull',
-                         'cd TruckMonitoringSystem; ls',
-                         'cd TruckMonitoringSystem; sudo bash install_deps_host.sh',
-                         'cd TruckMonitoringSystem; sudo bash run_broker.sh'])
+        c.connect(hostname=ssh_instance_broker.public_ip_address, username='ubuntu', pkey=cert)
+        run_commands(c, ['cd P2P-RPC/tests/scenario6; sudo bash install_deps_host.sh',
+                         'cd P2P-RPC/tests/scenario6; make broker'])
         c.close()
+    except Exception as e:
+        print("Connection Failed!!!")
 
+@cli.command()
+def setupworker():
+    instances, security_groups, key_pair = setup_demo()
+    ssh_instance_broker=instances[0]
+    ssh_instance_worker=instances[1]
+
+    transfer_files(ssh_instance_worker)
+    try:
+        c = paramiko.SSHClient()
+        cert = paramiko.RSAKey.from_private_key_file('demo-key-file.pem')
+        c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        c.connect(hostname=ssh_instance_worker.public_ip_address, username='ubuntu', pkey=cert)
+        run_commands(c, ['cd P2P-RPC/tests/scenario6; sudo bash install_deps_host.sh',
+                         'echo "' + ssh_instance_broker.public_ip_address + ':5002" > P2P-RPC/tests/scenario6/discovery.txt',
+                         'cd P2P-RPC/tests/scenario6; make worker'])
+        c.close()
     except Exception as e:
         print("Connection Failed!!!")
 
 
-@cli.command()
-def run_demos():
-
+def teardown():
     instances, security_groups, key_pair = setup_demo()
-    management_demo(*instances)
-
     teardown_demo(instances)
-
-
-@cli.command()
-def instances():
-    for i in ec2.instances.all():
-        print(i)
 
 def main():
     cli()
