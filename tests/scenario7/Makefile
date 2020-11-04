@@ -4,12 +4,13 @@ SHELL:=/bin/bash
 THIS_FILE := $(lastword $(MAKEFILE_LIST))
 
 services:
-	cd ../../; python setup.py install; cd tests/scenario6
+	cd ../../; python setup.py install; cd tests/scenario7
 	p2prpc generate-broker function_module/function.py
 	p2prpc start broker
 
 	p2prpc generate-worker function_module/function.py discovery.txt
 	p2prpc start worker
+	sudo docker-compose -f worker/worker.docker-compose.yml up -d --scale worker=3
 
 	p2prpc generate-client function_module/function.py discovery.txt
 	p2prpc start client

@@ -14,7 +14,8 @@ passlib \
 requests \
 deprecated \
 celery \
-requests_toolbelt
+requests_toolbelt \
+uwsgi
 
 COPY install_deps.sh /app/install_deps.sh
 

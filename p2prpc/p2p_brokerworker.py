@@ -22,6 +22,8 @@ from .base import P2PArguments
 from .base import P2PBlueprint
 from .bookkeeper import route_node_states
 from .bookkeeper import initial_discovery, update_function
+import threading
+lock = threading.Lock()  # TODO this should be chanegd with a proper multiprocesing lock
 import inspect
 if 'MONGO_PORT' in os.environ:
     MONGO_PORT = int(os.environ['MONGO_PORT'])
@@ -352,20 +354,23 @@ def route_execute_function(p2pbrokerfunction):
 
 def route_search_work(p2pbrokerfunction):
     logger = logging.getLogger(__name__)
+    lock.acquire()
 
     p2pbrokerarguments = [a for a in p2pbrokerfunction.list_all_arguments() if a.started=='available']
 
-    if not p2pbrokerarguments:
-        return jsonify({})
+    answer = jsonify({})
+    if p2pbrokerarguments:
 
-    p2pbrokerarguments.sort(key=lambda arg: arg.timestamp)
-    p2pbrokerargument = p2pbrokerarguments[0]
-    filter_ = {"identifier": p2pbrokerargument.p2parguments.args_identifier,
-               "remote_identifier": p2pbrokerargument.remote_args_identifier}
-    p2pbrokerargument.started = 'in_progress'
-    p2pbrokerfunction.update_arguments_in_db(filter_, ['started'], p2pbrokerargument)
-    logger.info("Node{}(possible client worker) will ask for filter: {}".format(request.remote_addr, str(filter_)))
-    return jsonify({"filter": filter_})
+        p2pbrokerarguments.sort(key=lambda arg: arg.timestamp)
+        p2pbrokerargument = p2pbrokerarguments[0]
+        filter_ = {"identifier": p2pbrokerargument.p2parguments.args_identifier,
+                   "remote_identifier": p2pbrokerargument.remote_args_identifier}
+        p2pbrokerargument.started = 'in_progress'
+        p2pbrokerfunction.update_arguments_in_db(filter_, ['started'], p2pbrokerargument)
+        logger.info("Node{}(possible client worker) will ask for filter: {}".format(request.remote_addr, str(filter_)))
+        answer = jsonify({"filter": filter_})
+    lock.release()
+    return answer
 
 
 def route_identifier_available(p2pbrokerfunction, identifier):

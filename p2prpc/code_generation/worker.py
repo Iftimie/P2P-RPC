@@ -46,9 +46,10 @@ services:
       - broker_mynet
 
   worker:
-    container_name: worker
-    ports:
-      - "5003:5003"
+    # TODO. if we need to scale the worker, it cannot have a container_name, or ports (because of collision)
+    # which means it shouldn't be a Flask service. meh... technical debt
+    #ports:
+    #  - "5003:5003"
     build:
       context: {docker_context}
       dockerfile: {dockerfile_path}

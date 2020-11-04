@@ -101,51 +101,70 @@ def find_response_with_work(db, collection, func_name, password):
 
 def check_brokerworker_termination(registry_functions):
     logger = logging.getLogger(__name__)
-    for p2pworkerfunction in registry_functions.values():
-        new_running_jobs = []
-        db_name = p2pworkerfunction.p2pfunction.db_name
-        db_collection = p2pworkerfunction.p2pfunction.db_collection
-        for process, p2pworkerarguments in p2pworkerfunction.running_jobs:
-            if process.is_alive():
-                search_filter = {"$or": [{"identifier": p2pworkerarguments.p2parguments.args_identifier},
-                                         {"identifier": p2pworkerarguments.remote_args_identifier}]}
+    try:
+        for p2pworkerfunction in registry_functions.values():
+            new_running_jobs = []
+            db_name = p2pworkerfunction.p2pfunction.db_name
+            db_collection = p2pworkerfunction.p2pfunction.db_collection
+            for process, p2pworkerarguments in p2pworkerfunction.running_jobs:
+                if process.is_alive():
+                    search_filter = {"$or": [{"identifier": p2pworkerarguments.p2parguments.args_identifier},
+                                             {"identifier": p2pworkerarguments.remote_args_identifier}]}
 
-                p2p_pull_update_one(db_name, db_collection, search_filter,
-                                    ['kill_clientworker'],
-                                    deserializer=partial(deserialize_doc_from_net, up_dir=None, key_interpreter=p2pworkerfunction.p2pfunction.args_interpreter),
-                                    password=p2pworkerfunction.p2pfunction.crypt_pass)
-                p2pworkerarguments_updated = p2pworkerfunction.load_arguments_from_db(search_filter)
+                    p2p_pull_update_one(db_name, db_collection, search_filter,
+                                        ['kill_clientworker'],
+                                        deserializer=partial(deserialize_doc_from_net, up_dir=None, key_interpreter=p2pworkerfunction.p2pfunction.args_interpreter),
+                                        password=p2pworkerfunction.p2pfunction.crypt_pass)
+                    p2pworkerarguments_updated = p2pworkerfunction.load_arguments_from_db(search_filter)
 
-                if p2pworkerarguments_updated.kill_clientworker is True:
-                    # don't delete the data here.
-                    p2p_push_update_one(db_name, db_collection, search_filter,
-                                        {"started": 'terminated', 'kill_clientworker': False}, password=p2pworkerfunction.p2pfunction.crypt_pass)
-                    process.terminate()
-                    logger.info("Terminated process: "+str(process))
-                else:
-                    new_running_jobs.append((process, p2pworkerarguments))
-        p2pworkerfunction.running_jobs = new_running_jobs
+                    if p2pworkerarguments_updated.kill_clientworker is True:
+                        # don't delete the data here.
+                        p2p_push_update_one(db_name, db_collection, search_filter,
+                                            {"started": 'terminated', 'kill_clientworker': False}, password=p2pworkerfunction.p2pfunction.crypt_pass)
+                        process.terminate()
+                        logger.info("Terminated process: "+str(process))
+                    else:
+                        new_running_jobs.append((process, p2pworkerarguments))
+            p2pworkerfunction.running_jobs = new_running_jobs
+    except FileNotFoundError:
+        # TODO. in case there worker is scaled to more than 1. while the first one looks into the DB, the second one can be
+        #  trying to delete the function. but it cannot even load from the db because the file wasn't downloaded yet
+        #  that's why I expect FileNotFoundError
+        #  To solve this issue, I should introduce the Idea of owner. I may want to know to which broker/worker a particular argument belongs to
+        logger.info("FileNotFoundError")
+    except Exception as e:
+        raise e
 
 
 def check_brokerworker_deletion(registry_functions):
+    logger = logging.getLogger(__name__)
+    try:
 
-    for p2pworkerfunction in registry_functions.values():
-        for p2pworkerarguments in p2pworkerfunction.list_all_arguments():
-            search_filter = {"$or": [{"identifier": p2pworkerarguments.p2parguments.args_identifier},
-                                     {"identifier": p2pworkerarguments.remote_args_identifier}]}
-            p2p_pull_update_one(p2pworkerfunction.p2pfunction.db_name,
-                                p2pworkerfunction.p2pfunction.db_collection, search_filter, ['delete_clientworker'],
-                                deserializer=partial(deserialize_doc_from_net, up_dir=None,
-                                                     key_interpreter=p2pworkerfunction.p2pfunction.args_interpreter),
-                                password=p2pworkerfunction.p2pfunction.crypt_pass)
-            p2pworkerarguments_updated = p2pworkerfunction.load_arguments_from_db(search_filter)
-
-            if p2pworkerarguments_updated.delete_clientworker is True:
-                p2p_push_update_one(p2pworkerfunction.p2pfunction.db_name,
-                                    p2pworkerfunction.p2pfunction.db_collection, search_filter,
-                                    {'delete_clientworker': False},
+        for p2pworkerfunction in registry_functions.values():
+            for p2pworkerarguments in p2pworkerfunction.list_all_arguments():
+                search_filter = {"$or": [{"identifier": p2pworkerarguments.p2parguments.args_identifier},
+                                         {"identifier": p2pworkerarguments.remote_args_identifier}]}
+                p2p_pull_update_one(p2pworkerfunction.p2pfunction.db_name,
+                                    p2pworkerfunction.p2pfunction.db_collection, search_filter, ['delete_clientworker'],
+                                    deserializer=partial(deserialize_doc_from_net, up_dir=None,
+                                                         key_interpreter=p2pworkerfunction.p2pfunction.args_interpreter),
                                     password=p2pworkerfunction.p2pfunction.crypt_pass)
-                p2pworkerfunction.remove_arguments_from_db(p2pworkerarguments_updated)
+                p2pworkerarguments_updated = p2pworkerfunction.load_arguments_from_db(search_filter)
+
+                if p2pworkerarguments_updated.delete_clientworker is True:
+                    p2p_push_update_one(p2pworkerfunction.p2pfunction.db_name,
+                                        p2pworkerfunction.p2pfunction.db_collection, search_filter,
+                                        {'delete_clientworker': False},
+                                        password=p2pworkerfunction.p2pfunction.crypt_pass)
+                    p2pworkerfunction.remove_arguments_from_db(p2pworkerarguments_updated)
+    except FileNotFoundError:
+        # TODO. in case there worker is scaled to more than 1. while the first one looks into the DB, the second one can be
+        #  trying to delete the function. but it cannot even load from the db because the file wasn't downloaded yet
+        #  that's why I expect FileNotFoundError
+        #  To solve this issue, I should introduce the Idea of owner. I may want to know to which broker/worker a particular argument belongs to
+        logger.info("FileNotFoundError")
+    except Exception as e:
+        raise e
 
 
 class P2PWorkerArguments:

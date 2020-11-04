@@ -335,7 +335,9 @@ def p2p_insert_one(db, col, document, nodes, serializer=serialize_doc_for_net, c
         update["nodes"] = nodes
         update["current_address"] = current_addr
         # TODO should be insert and throw error if identifier exists
-        update_one(db, col, {'identifier': data['identifier']}, update, upsert=True)
+        search_filter = {"$or": [{"identifier": data['identifier']},
+                                 {"identifier": data['remote_identifier']}]}
+        update_one(db, col, search_filter, update, upsert=True)
     except ValueError as e:
         logger.info(traceback.format_exc())
         raise e
