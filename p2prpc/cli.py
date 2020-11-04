@@ -109,6 +109,7 @@ def start(service_type):
         output = subprocess.getoutput(
             "sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' broker-discovery")
         while output=="":
+            print("broker-discovery service not started")
             time.sleep(1)
             output = subprocess.getoutput(
                 "sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' broker-discovery")
@@ -132,8 +133,14 @@ def kill(service_type):
 @click.argument('service_type')
 def delete(service_type):
     assert service_type in SERVICE_TYPES
+    os.system(f'sudo docker-compose -f {service_type}/{service_type}.docker-compose.yml kill')
     os.system(f'sudo docker-compose -f {service_type}/{service_type}.docker-compose.yml rm -f')
-    os.system(f'sudo rm -R {service_type}')
+    if service_type=='client':
+        os.system('sudo rm -R client/client.docker-compose.yml || true')
+        os.system('sudo rm -R client/mongohost.txt || true')
+        os.system('sudo rm -R client/Dockerfile || true')
+    else:
+        os.system(f'sudo rm -R {service_type}')
 
 
 @cli.command()

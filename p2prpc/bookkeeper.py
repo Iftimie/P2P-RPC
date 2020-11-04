@@ -166,11 +166,12 @@ def initial_discovery(local_port, app_roles, discovery_ips_file, password):
     discovered_states = []
     res = query_node_states()
     discovered_states.extend(res)
-    discovered_states.append(get_state_in_lan(local_port, app_roles))
-    discovered_states.extend(get_state_in_wan(local_port, app_roles, password))
+    # discovered_states.append(get_state_in_lan(local_port, app_roles))
+    # discovered_states.extend(get_state_in_wan(local_port, app_roles, password))
     discovered_states.extend(get_states_from_file(discovery_ips_file))
     discovered_states = set_from_list(discovered_states)
-    write_node_states(discovered_states)
+    if discovered_states:
+        write_node_states(discovered_states)
 
 
 def update_function():
@@ -192,10 +193,10 @@ def update_function():
 
     discovered_states = list(filter(lambda d: len(d) > 1, discovered_states))
 
-    write_node_states(discovered_states)
-
-    # publish them remotely
-    push_to_nodes(discovered_states)
+    if discovered_states:
+        write_node_states(discovered_states)
+        # publish them remotely
+        push_to_nodes(discovered_states)
 
 
 def find_workload():

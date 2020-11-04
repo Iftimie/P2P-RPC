@@ -9,3 +9,4 @@ requests
 deprecated
 celery
 requests_toolbelt
+# TODO I should remove this requirements.txt from here, because I added the requirements to the Dockerfile.py
